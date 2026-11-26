@@ -39,7 +39,7 @@ import time
 from bisect import bisect_left, bisect_right
 from collections import Counter
 from collections.abc import Callable
-from contextlib import closing, nullcontext
+from contextlib import closing, contextmanager, nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
@@ -118,7 +118,7 @@ DB_PATH = DB_PATH.expanduser() if os.environ.get(DB_PATH_ENV) else resolve_db_pa
 # `feedback.py journal-coverage FILE` replays into an empty store and compares it with this one table by table,
 # so a table whose ROW COUNT differs is printed instead of lost (it compares counts, not row content).
 # `ts`/`timestamp` are fixed at the original call, and a replay runs each call under a clock frozen at the
-# call's journaled time (_ReplayClock), so every default a writer takes from the clock (pulled_ts, recorded_ts,
+# call's journaled time (_frozen_clock), so every default a writer takes from the clock (pulled_ts, recorded_ts,
 # completed_ts, a time_ns-derived identity) comes out as it did on the runner, and a second replay of the same
 # call derives the same identity. Applied lines are recorded in `journal_applied`, so a retried replay skips
 # them instead of writing old values over newer local ones. Completion payloads are journaled with sensitive
@@ -139,20 +139,38 @@ _real_time = time
 _JOURNAL_RESULT_IDENTITY = {"record_role_selector_event": ("role_run_id", "run_id")}
 
 
-class _ReplayClock:
-    """The `time` module as the writers see it while one journaled call is replayed: frozen at the call's time."""
-
-    def __init__(self, at: float):
-        self._at = float(at)
+class _JournalClock:
+    """The `time` module as the writers see it once this process journals or replays: a thread inside a journaled
+    call (or its replay) reads that call's frozen time; every other thread, and every other moment, reads the real
+    clock. Per thread, so overlapping calls in threads (sync-core uses them) never see each other's time.
+    """
 
     def time(self) -> float:
-        return self._at
+        at = getattr(_journal_state, "clock_at", None)
+        return _real_time.time() if at is None else at
 
     def time_ns(self) -> int:
-        return int(self._at * 1_000_000_000)
+        at = getattr(_journal_state, "clock_at", None)
+        return _real_time.time_ns() if at is None else int(at * 1_000_000_000)
 
     def __getattr__(self, name):
         return getattr(_real_time, name)
+
+
+_journal_clock = _JournalClock()
+
+
+@contextmanager
+def _frozen_clock(at: float):
+    """Freeze this thread's clock at `at` for the block (installs _JournalClock as `time` on first use)."""
+    global time
+    time = cast(Any, _journal_clock)
+    prior = getattr(_journal_state, "clock_at", None)
+    _journal_state.clock_at = float(at)
+    try:
+        yield
+    finally:
+        _journal_state.clock_at = prior
 
 
 def _journal_encode(value):
@@ -223,7 +241,9 @@ def _journal_scrub_payload(payload):
     clean = {}
     for key, value in payload.items():
         name = str(key)
-        if name not in COMPLETION_PAYLOAD_FIELDS and SENSITIVE_COMPLETION_FIELD_RE.search(name):
+        if (
+            name not in COMPLETION_PAYLOAD_FIELDS
+        ):  # rejected (or redacted) by name; its value is never stored
             clean[key] = _JOURNAL_REDACTED
         elif name == "artifact_refs":
             clean[key] = _journal_scrub_artifact_refs(value)
@@ -243,24 +263,40 @@ def _journal_scrub_payload(payload):
             else:
                 items = [value]
             clean[key] = [_journal_identifier(i) for i in items]
-        elif name == "result" and isinstance(value, dict):
+        elif name in COMPLETION_NESTED_FIELDS and isinstance(value, dict):
+            allowed = COMPLETION_NESTED_FIELDS[name]
             clean[key] = {
                 k: (
-                    _journal_hashed(v)
-                    if k in _JOURNAL_RESULT_HASH_KEYS and v
-                    else _journal_scrub(v, keys=True)
+                    _JOURNAL_REDACTED  # an unknown nested key rejects the field: its value is never stored
+                    if k not in allowed
+                    else (
+                        _journal_hashed(v)
+                        if name == "result" and k in _JOURNAL_RESULT_HASH_KEYS and v
+                        else (
+                            _journal_scrub_result_hashes(v)
+                            if name == "verification" and k == "result_hashes"
+                            else _journal_scrub(v, keys=True)
+                        )
+                    )
                 )
                 for k, v in value.items()
             }
-        elif name == "verification" and isinstance(value, dict):
-            clean[key] = {
-                k: (
-                    _journal_scrub_result_hashes(v)
-                    if k == "result_hashes"
-                    else _journal_scrub(v, keys=True)
+        elif name == "retry_sequence" and isinstance(value, (list, tuple)):
+            clean[key] = [
+                (
+                    {
+                        k: (
+                            _JOURNAL_REDACTED
+                            if k not in COMPLETION_RETRY_FIELDS
+                            else _journal_scrub(v, keys=True)
+                        )
+                        for k, v in row.items()
+                    }
+                    if isinstance(row, dict)
+                    else _journal_scrub(row, keys=True)
                 )
-                for k, v in value.items()
-            }
+                for row in value
+            ]
         else:
             clean[key] = _journal_scrub(value, keys=True)
     return clean
@@ -303,7 +339,7 @@ def _journal_scrub_result_hashes(value):
     """verification.result_hashes keeps only hashes: a dict's values are hashed, anything else becomes the
     single-entry dict the sanitizer would store."""
     if isinstance(value, dict):
-        return {k: _journal_hashed(v) for k, v in value.items()}
+        return {_journal_identifier(k): _journal_hashed(v) for k, v in value.items()}
     return {"result": _completion_hash(value)}
 
 
@@ -349,16 +385,14 @@ def _journaled(fn: Callable) -> Callable:
         depth = getattr(_journal_state, "depth", 0)
         if not path or depth:
             return fn(*args, **kwargs)
-        global time
         bound, line = _journal_call(fn, sig, args, kwargs)
         _journal_state.depth = depth + 1
         # The original call runs under the same frozen clock its replay will, so every clock default it writes
         # (pulled_ts, recorded_ts, a time_ns identity) is the value the Mac's replay writes.
-        time = cast(Any, _ReplayClock(json.loads(line)["at"]))
         try:
-            result = fn(*bound.args, **bound.kwargs)
+            with _frozen_clock(json.loads(line)["at"]):
+                result = fn(*bound.args, **bound.kwargs)
         finally:
-            time = _real_time
             _journal_state.depth = depth
         if bound.arguments.get("conn") is not None:
             # Part of the caller's open transaction (ingest_profile_trial), which may still roll back: not
@@ -384,7 +418,6 @@ def replay_journal(path: Path) -> dict:
     """Make every journaled call in `path` against this process's store. A line that fails is returned with its
     error (and counted) instead of stopping the file, so one bad line can never hold the rest back.
     """
-    global time
     replayed, skipped, errors = 0, 0, []
     name = Path(
         path
@@ -415,12 +448,8 @@ def replay_journal(path: Path) -> dict:
                     raise ValueError(
                         f"journaled call was not serializable: {entry['unserializable']}"
                     )
-                # Any: the writers only call time()/time_ns() and attributes it forwards to the real module.
-                time = cast(Any, _ReplayClock(entry.get("at") or _real_time.time()))
-                try:
+                with _frozen_clock(entry.get("at") or _real_time.time()):
                     _JOURNALED[entry["fn"]](**entry["args"])
-                finally:
-                    time = _real_time
                 with closing(_conn()) as c:
                     c.execute(
                         f"INSERT OR IGNORE INTO {_JOURNAL_APPLIED_TABLE} VALUES (?, ?, ?)",

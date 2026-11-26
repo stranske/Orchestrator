@@ -322,6 +322,16 @@ def test_a_completion_payload_is_journaled_redacted_and_replays_the_same_row(tmp
         },
         timestamp=1700000000,
     )
+    feedback.record_completion_event(  # fields the sanitizer rejects, and a prose key it hashes
+        "remote:o/r#9e:codex",
+        payload={"unexpected": "unexpected field text", "result": {"bogus": "nested field text"}},
+        timestamp=1700000000,
+    )
+    feedback.record_completion_event(
+        "remote:o/r#9f:codex",
+        payload={"verification": {"result_hashes": {"verification key text": "x"}}},
+        timestamp=1700000000,
+    )
     feedback.record_completion_event(
         "remote:o/r#9d:codex",
         payload={"artifact_refs": "scalar artifact text"},
@@ -344,6 +354,9 @@ def test_a_completion_payload_is_journaled_redacted_and_replays_the_same_row(tmp
         "prose artifact id text",
         "role prose text",
         "scalar artifact text",
+        "unexpected field text",
+        "nested field text",
+        "verification key text",
     ):
         assert private not in text
     sql = (
@@ -366,10 +379,17 @@ def test_a_replay_keeps_every_clock_default_and_clock_derived_identity(tmp_path,
     with monkeypatch.context() as m:
         m.setattr(feedback._real_time, "time", lambda: float(next(ticks)))
         feedback.record_cost("remote:o/r#10:codex", 10, 20, 0.5, 3.0, "hosted")
-    runner_cost = _rows(tmp_path / "runner.db", "SELECT pulled_ts FROM costs")
+        feedback.record_execution_attempt(
+            "remote:o/r#10:codex", attempt_id="a-10", operation_role="worker"
+        )
+    clocks = (
+        "SELECT (SELECT pulled_ts FROM costs), "
+        "(SELECT recorded_ts FROM execution_attempts WHERE attempt_id='a-10')"
+    )
+    runner_clocks = _rows(tmp_path / "runner.db", clocks)
     mac0 = _journal_store(tmp_path, monkeypatch, "mac0")
-    feedback.replay_journal(journal)
-    assert _rows(mac0, "SELECT pulled_ts FROM costs") == runner_cost  # the runner's own clock value
+    assert feedback.replay_journal(journal)["rejected"] == 0
+    assert _rows(mac0, clocks) == runner_clocks  # the runner's own clock values, not the Mac's
     _journal_store(tmp_path, monkeypatch, "runner")
     journal.unlink()
     feedback.record_cost("remote:o/r#10:codex", 10, 20, 0.5, 3.0, "hosted")
@@ -416,3 +436,31 @@ def test_a_write_inside_a_callers_transaction_is_not_journaled(tmp_path, monkeyp
     finally:
         c.close()
     assert not journal.exists()
+
+
+def test_overlapping_journaled_calls_in_threads_keep_their_own_clock(tmp_path, monkeypatch):
+    import threading
+
+    _journal_store(tmp_path, monkeypatch, "runner")
+    monkeypatch.setenv(feedback.JOURNAL_ENV, str(tmp_path / "j.jsonl"))
+    seen = {}
+    inside, release = threading.Event(), threading.Event()
+
+    def slow(at):
+        with feedback._frozen_clock(at):
+            inside.set()
+            release.wait(5)
+            seen["slow"] = feedback.time.time()
+
+    worker = threading.Thread(target=slow, args=(1_000.0,))
+    worker.start()
+    inside.wait(5)
+    with feedback._frozen_clock(
+        2_000.0
+    ):  # a second call starts and ends while the first is still inside
+        seen["fast"] = feedback.time.time()
+    seen["outside"] = feedback.time.time()
+    release.set()
+    worker.join(5)
+    assert (seen["slow"], seen["fast"]) == (1_000.0, 2_000.0)
+    assert seen["outside"] > 1_700_000_000  # a thread outside any call reads the real clock
