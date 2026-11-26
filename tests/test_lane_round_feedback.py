@@ -357,7 +357,11 @@ def test_a_completion_payload_is_journaled_redacted_and_replays_the_same_row(tmp
         influence_id="role:needs-human",
         accepted=True,
         allow_unlinked=True,
-        metadata={"notes_hash": "edge metadata text", "status": "edge status text"},
+        metadata={
+            "notes_hash": "edge metadata text",
+            "status": "edge status text",
+            "influence_type": ["nested edge text", {"deep": "deep edge text"}],
+        },
     )
     monkeypatch.delenv(feedback.JOURNAL_ENV)
     text = journal.read_text()
@@ -383,6 +387,8 @@ def test_a_completion_payload_is_journaled_redacted_and_replays_the_same_row(tmp
         "nondict result text",
         "edge metadata text",
         "edge status text",
+        "nested edge text",
+        "deep edge text",
         "string retry text",
     ):
         assert private not in text

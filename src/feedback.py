@@ -341,6 +341,18 @@ def _journal_hashed(value) -> str:
     return text if _JOURNAL_HASH_RE.fullmatch(text) else _completion_hash(value)
 
 
+def _journal_hash_strings(value):
+    """Every non-empty string at any depth replaced by its hash (dict keys are kept: they are field names)."""
+    if isinstance(value, str):
+        return _journal_hashed(value) if value else value
+    if isinstance(value, dict):
+        return {k: _journal_hash_strings(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        items = sorted(value, key=str) if isinstance(value, (set, frozenset)) else value
+        return [_journal_hash_strings(v) for v in items]
+    return value
+
+
 def _journal_scrub_result_hashes(value):
     """verification.result_hashes keeps only hashes: a dict's values are hashed, anything else becomes the
     single-entry dict the sanitizer would store."""
@@ -374,13 +386,8 @@ def _journal_call(
         scrubbed = _journal_scrub_payload({"result": bound.arguments["kwargs"]["metadata"]})[
             "result"
         ]
-        if isinstance(
-            scrubbed, dict
-        ):  # only its hash is stored, so no text value need travel either
-            scrubbed = {
-                k: (_journal_hashed(v) if isinstance(v, str) and v else v)
-                for k, v in scrubbed.items()
-            }
+        # Only its hash is stored, so no text value, at any depth, need travel either.
+        scrubbed = _journal_hash_strings(scrubbed)
         bound.arguments["kwargs"]["metadata"] = call["metadata"] = scrubbed
     if fn.__name__ == "record_completion_event" and "payload" in bound.arguments:
         # The writer gets the journal's payload too, so the runner's row and the replayed row come from the same
