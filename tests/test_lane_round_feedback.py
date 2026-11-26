@@ -292,12 +292,22 @@ def test_a_completion_payload_is_journaled_redacted_and_replays_the_same_row(tmp
             "raw_prompt": "implement it, token " + secret,
             "capability_ids": {"cap-a"},  # a set: the sanitizer accepts it, so the journal must too
             "role_ids": [secret],
+            "artifact_refs": [
+                {
+                    "artifact_id": "receipt",
+                    "raw_prompt": "private text",
+                    "content_hash": "plain body",
+                }
+            ],
+            "result_hashes": ["plain result text"],
         },
         timestamp=1700000000,
     )
     monkeypatch.delenv(feedback.JOURNAL_ENV)
     text = journal.read_text()
-    assert secret not in text and "implement it" not in text and "unserializable" not in text
+    assert "unserializable" not in text
+    for private in (secret, "implement it", "private text", "plain body", "plain result text"):
+        assert private not in text
     sql = "SELECT event_id, payload_json, content_hash FROM completion_events ORDER BY event_id"
     original = _rows(runner, sql)
     assert secret not in str(original)

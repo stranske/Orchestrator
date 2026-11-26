@@ -182,11 +182,41 @@ def _journal_scrub(value, *, keys: bool):
     return value
 
 
+_JOURNAL_HASH_RE = re.compile(r"(?:sha256:)?[a-fA-F0-9]{64}")
+_JOURNAL_ARTIFACT_KEYS = {"artifact_id", "kind", "content_hash", "ref_class"}
+
+
+def _journal_scrub_artifact_refs(value):
+    """artifact_refs as the journal may hold it: the sanitizer drops a row's keys outside its allowed set (so their
+    values are dropped here) and keeps only the hash of a plain-text content_hash (so the hash is journaled).
+    """
+    if not isinstance(value, (list, tuple)):
+        return _journal_scrub(value, keys=False)
+    rows = []
+    for row in value:
+        if not isinstance(row, dict):
+            rows.append(_journal_scrub(row, keys=False))
+            continue
+        clean = {}
+        for key, item in row.items():
+            if key not in _JOURNAL_ARTIFACT_KEYS:
+                clean[key] = _JOURNAL_REDACTED
+            elif key == "content_hash" and item not in (None, ""):
+                text = str(item)
+                clean[key] = text if _JOURNAL_HASH_RE.fullmatch(text) else _completion_hash(text)
+            else:
+                clean[key] = _journal_scrub(item, keys=False)
+        rows.append(clean)
+    return rows
+
+
 def _journal_scrub_payload(payload):
-    """A completion payload as the journal may hold it. Top-level fields outside COMPLETION_PAYLOAD_FIELDS and
-    nested sensitive-named fields are dropped by the sanitizer, so their values are dropped here; artifact_refs
-    hashes its keys' values instead, so only secret-shaped values are replaced there. A secret-shaped value in a
-    hashed field replays to a different hash: accepted, the alternative is a secret in git history.
+    """A completion payload as the journal may hold it: nothing the Brain would not hold, and a replay through the
+    sanitizer stores the same row. Top-level fields outside COMPLETION_PAYLOAD_FIELDS and nested sensitive-named
+    fields are dropped by the sanitizer, so their values are dropped here; result_hashes and artifact_refs keep
+    only hashes of plain text, so the journal holds those hashes (the sanitizer keeps a hash-shaped value as is).
+    A secret-shaped value in any other hashed field replays to a different hash: accepted, the alternative is a
+    secret in git history.
     """
     if not isinstance(payload, dict):
         return payload
@@ -195,8 +225,16 @@ def _journal_scrub_payload(payload):
         name = str(key)
         if name not in COMPLETION_PAYLOAD_FIELDS and SENSITIVE_COMPLETION_FIELD_RE.search(name):
             clean[key] = _JOURNAL_REDACTED
+        elif name == "artifact_refs":
+            clean[key] = _journal_scrub_artifact_refs(value)
+        elif name == "result_hashes" and isinstance(value, (list, tuple, set, frozenset)):
+            items = sorted(value, key=str) if isinstance(value, (set, frozenset)) else value
+            clean[key] = [
+                (str(i or "") if _JOURNAL_HASH_RE.fullmatch(str(i or "")) else _completion_hash(i))
+                for i in items
+            ]
         else:
-            clean[key] = _journal_scrub(value, keys=name != "artifact_refs")
+            clean[key] = _journal_scrub(value, keys=True)
     return clean
 
 
