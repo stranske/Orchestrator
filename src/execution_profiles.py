@@ -169,6 +169,7 @@ PROFILE_REGISTRY: dict[str, dict[str, Any]] = {
         _profile("codex-6.2-astra-high", "gpt-6.2-astra", "high", prior_offset=0.05),
         _profile("codex-5.6-terra-high", "gpt-5.6-terra", "high"),
         _profile("codex-5.6-terra-medium", "gpt-5.6-terra", "medium"),
+        _profile("codex-6.1-terra-medium", "gpt-6.1-terra", "medium"),
         _profile("codex-5.6-luna-high", "gpt-5.6-luna", "high", prior_offset=-0.02),
         _profile("codex-5.6-luna-low", "gpt-5.6-luna", "low"),
         _profile("codex-6-luna-low", "gpt-6-luna", "low"),

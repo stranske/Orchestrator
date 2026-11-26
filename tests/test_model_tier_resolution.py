@@ -310,7 +310,7 @@ def test_build_command_honours_every_tier(tmp_path, monkeypatch):
     for agent in ("CODEX", "CLAUDE", "GEMINI"):
         monkeypatch.delenv("ORCH_" + agent + "_MAX_TIER", raising=False)
     expected = {
-        "codex": ("gpt-6-luna", "gpt-5.6-terra", "gpt-6.2-sol"),
+        "codex": ("gpt-6-luna", "gpt-6.1-terra", "gpt-6.2-sol"),
         "claude": ("claude-haiku-4-5", "claude-sonnet-5-5", "claude-opus-5-5"),
         "gemini": ("gemini-4-hydrogen-low", "gemini-4-hydrogen-high", "gemini-4-neon-high"),
     }

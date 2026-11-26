@@ -196,7 +196,7 @@ TABLE_JSON = r"""{
       "role": "primary",
       "models": {
         "cheap": "gpt-6-luna",
-        "mid": "gpt-5.6-terra",
+        "mid": "gpt-6.1-terra",
         "full": "gpt-6.2-sol",
         "frontier": "gpt-6.2-astra"
       },
