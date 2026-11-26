@@ -307,7 +307,8 @@ def test_a_completion_payload_is_journaled_redacted_and_replays_the_same_row(tmp
         "remote:o/r#9c:codex",
         payload={
             "capability_ids": {"cap-c", "cap-a", "cap-b", "cap-d"},
-            "artifact_refs": ["string artifact text"],
+            "artifact_refs": ["string artifact text", {"artifact_id": "prose artifact id text"}],
+            "role_ids": ["role prose text"],
             "result": {"proposal_hash": "proposal body text", "status": "ok"},
             "verification": {"result_hashes": {"pytest": "verification body text"}},
         },
@@ -319,6 +320,11 @@ def test_a_completion_payload_is_journaled_redacted_and_replays_the_same_row(tmp
             "artifact_refs": {"artifact_id": "receipt", "raw_prompt": "single ref text"},
             "result_hashes": "scalar result text",
         },
+        timestamp=1700000000,
+    )
+    feedback.record_completion_event(
+        "remote:o/r#9d:codex",
+        payload={"artifact_refs": "scalar artifact text"},
         timestamp=1700000000,
     )
     monkeypatch.delenv(feedback.JOURNAL_ENV)
@@ -335,6 +341,9 @@ def test_a_completion_payload_is_journaled_redacted_and_replays_the_same_row(tmp
         "string artifact text",
         "proposal body text",
         "verification body text",
+        "prose artifact id text",
+        "role prose text",
+        "scalar artifact text",
     ):
         assert private not in text
     sql = (
@@ -353,6 +362,16 @@ def test_a_replay_keeps_every_clock_default_and_clock_derived_identity(tmp_path,
     journal = tmp_path / "j.jsonl"
     _journal_store(tmp_path, monkeypatch, "runner")
     monkeypatch.setenv(feedback.JOURNAL_ENV, str(journal))
+    ticks = iter(range(1_700_000_000, 1_700_000_100))  # every clock read crosses a second boundary
+    with monkeypatch.context() as m:
+        m.setattr(feedback._real_time, "time", lambda: float(next(ticks)))
+        feedback.record_cost("remote:o/r#10:codex", 10, 20, 0.5, 3.0, "hosted")
+    runner_cost = _rows(tmp_path / "runner.db", "SELECT pulled_ts FROM costs")
+    mac0 = _journal_store(tmp_path, monkeypatch, "mac0")
+    feedback.replay_journal(journal)
+    assert _rows(mac0, "SELECT pulled_ts FROM costs") == runner_cost  # the runner's own clock value
+    _journal_store(tmp_path, monkeypatch, "runner")
+    journal.unlink()
     feedback.record_cost("remote:o/r#10:codex", 10, 20, 0.5, 3.0, "hosted")
     feedback.record_role_selector_event("needs-human", "no_matching_work", reason="none")
     monkeypatch.delenv(feedback.JOURNAL_ENV)

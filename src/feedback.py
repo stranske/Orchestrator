@@ -190,10 +190,8 @@ def _journal_scrub_artifact_refs(value):
     """artifact_refs as the journal may hold it: the sanitizer drops a row's keys outside its allowed set (so their
     values are dropped here) and keeps only the hash of a plain-text content_hash (so the hash is journaled).
     """
-    if isinstance(value, dict):
-        value = [value]  # the sanitizer reads a single ref as a one-row list
     if not isinstance(value, (list, tuple)):
-        return _journal_scrub(value, keys=False)
+        value = [value]  # the sanitizer reads a single ref (dict or scalar) as a one-row list
     rows = []
     for row in value:
         if not isinstance(row, dict):  # the sanitizer keeps only its hash
@@ -207,7 +205,7 @@ def _journal_scrub_artifact_refs(value):
                 text = str(item)
                 clean[key] = text if _JOURNAL_HASH_RE.fullmatch(text) else _completion_hash(text)
             else:
-                clean[key] = _journal_scrub(item, keys=False)
+                clean[key] = _journal_identifier(item)
         rows.append(clean)
     return rows
 
@@ -237,6 +235,14 @@ def _journal_scrub_payload(payload):
             else:
                 items = [value]  # the sanitizer reads a scalar as a one-item list
             clean[key] = [_journal_hashed(i) for i in items]
+        elif name in _JOURNAL_IDENTIFIER_LISTS:
+            if isinstance(value, (set, frozenset)):
+                items = sorted(value, key=str)
+            elif isinstance(value, (list, tuple)):
+                items = list(value)
+            else:
+                items = [value]
+            clean[key] = [_journal_identifier(i) for i in items]
         elif name == "result" and isinstance(value, dict):
             clean[key] = {
                 k: (
@@ -261,6 +267,31 @@ def _journal_scrub_payload(payload):
 
 
 _JOURNAL_RESULT_HASH_KEYS = ("trace_key_hash", "proposal_hash", "notes_hash", "version_hash")
+_JOURNAL_IDENTIFIER_RE = re.compile(r"[A-Za-z0-9_.:/#@+-]{1,192}")
+# Payload lists whose items the sanitizer keeps only as identifiers (_safe_identifier hashes anything else).
+_JOURNAL_IDENTIFIER_LISTS = {
+    "changed_path_classes",
+    "command_ids",
+    "test_ids",
+    "capability_ids",
+    "role_ids",
+    "skill_ids",
+    "workflow_ids",
+    "acceptance_gate_ids",
+    "root_cause_ids",
+    "panel_ids",
+}
+
+
+def _journal_identifier(value):
+    """An identifier as the Brain keeps it: secret-shaped -> the stand-in (redacted), prose -> its hash."""
+    if value in (None, "") or isinstance(value, (bool, int, float)):
+        return value
+    text = str(value)
+    if SECRET_VALUE_RE.search(text):
+        return _JOURNAL_SECRET_STANDIN
+    text = text.strip()
+    return text if _JOURNAL_IDENTIFIER_RE.fullmatch(text) else _completion_hash(text)
 
 
 def _journal_hashed(value) -> str:
@@ -318,15 +349,21 @@ def _journaled(fn: Callable) -> Callable:
         depth = getattr(_journal_state, "depth", 0)
         if not path or depth:
             return fn(*args, **kwargs)
+        global time
         bound, line = _journal_call(fn, sig, args, kwargs)
         _journal_state.depth = depth + 1
+        # The original call runs under the same frozen clock its replay will, so every clock default it writes
+        # (pulled_ts, recorded_ts, a time_ns identity) is the value the Mac's replay writes.
+        time = cast(Any, _ReplayClock(json.loads(line)["at"]))
         try:
             result = fn(*bound.args, **bound.kwargs)
         finally:
+            time = _real_time
             _journal_state.depth = depth
         if bound.arguments.get("conn") is not None:
             # Part of the caller's open transaction (ingest_profile_trial), which may still roll back: not
-            # journaled, so journal-coverage names its table instead of a replay committing a row that never was.
+            # journaled, so a replay never commits a row that never was; journal-coverage names its table only
+            # when the write changed that table's row count.
             return result
         param, key = _JOURNAL_RESULT_IDENTITY.get(fn.__name__, (None, None))
         if param and isinstance(result, dict) and result.get(key):
@@ -422,8 +459,9 @@ def _table_counts(db: Path) -> dict[str, int]:
 
 def journal_coverage(path: Path, scratch: Path) -> dict:
     """Replay `path` into an empty store under `scratch` and compare row counts with this store, table by table.
-    Equal everywhere means the journal carries every row this process wrote; a table that differs was written
-    outside the journaled writers (or rejected on replay) and is listed."""
+    A table whose count differs was written outside the journaled writers (or rejected on replay) and is listed.
+    Equal counts do not prove equal content: an unjournaled update that changes a row without adding one is not
+    detected."""
     global DB_PATH
     actual = _table_counts(DB_PATH)
     original = DB_PATH
