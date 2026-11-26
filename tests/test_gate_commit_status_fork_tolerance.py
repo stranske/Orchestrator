@@ -427,9 +427,7 @@ def comment(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
             for head in COMMENT_HEADS
         ),
     ]
-    return _run(
-        tmp_path_factory.mktemp("gate-comment"), COMMENT_RUNNER, COMMENT_STEP, cases
-    )
+    return _run(tmp_path_factory.mktemp("gate-comment"), COMMENT_RUNNER, COMMENT_STEP, cases)
 
 
 @pytest.fixture(scope="module")
