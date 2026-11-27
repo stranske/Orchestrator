@@ -547,8 +547,27 @@ def cursor_json_result(lines: Iterable[str]) -> dict[str, Any] | None:
     return None
 
 
-def cursor_result_cost(result: dict[str, Any]) -> tuple[int | None, int | None, float | None, str]:
-    """Price complete token counts using the model named in the CLI result."""
+# Composer 2.5 list prices, USD per million tokens (capacity.py: $0.50 in, $0.20 cache read, $2.50 out).
+# A cache write is billed as input. Cache tokens are real spend: one lane run on Ready#704 (2026-11-27)
+# read 1,221,952 cached tokens beside 153,242 uncached ones.
+COMPOSER_25_PRICE_PER_M = {"input": 0.50, "cache_read": 0.20, "cache_write": 0.50, "output": 2.50}
+_COMPOSER_25_NAMES = {"composer-2.5", "composer 2.5", "composer pro 2.5"}
+
+
+def _cursor_model_name(model: object) -> str | None:
+    """`cursor:composer-2.5` (the run row's model) and `Composer 2.5` (the CLI's) name one model."""
+    if not isinstance(model, str) or not model.strip():
+        return None
+    name = model.strip().lower()
+    return name.split(":", 1)[1] if name.startswith("cursor:") else name
+
+
+def cursor_result_cost(
+    result: dict[str, Any], requested_model: str | None = None
+) -> tuple[int | None, int | None, float | None, str]:
+    """Price complete token counts. The model is the one the CLI result names, else the one the run
+    requested: Cursor's `--output-format json` result carries `usage` but no `model` (CLI 2026.11.22),
+    and every lane run names its model on the command line."""
     usage = result.get("usage")
     if not isinstance(usage, dict):
         return None, None, None, CURSOR_CLI_NO_USAGE
@@ -563,15 +582,25 @@ def cursor_result_cost(result: dict[str, Any]) -> tuple[int | None, int | None, 
         or not 0 <= tokens_out < 2**63
     ):
         return None, None, None, CURSOR_CLI_NO_USAGE
-    model = result.get("model")
-    if not isinstance(model, str) or model.strip().lower() not in {
-        "composer-2.5",
-        "composer 2.5",
-        "composer pro 2.5",
-    }:
+    model = _cursor_model_name(result.get("model")) or _cursor_model_name(requested_model)
+    if model not in _COMPOSER_25_NAMES:
         return tokens_in, tokens_out, None, CURSOR_CLI_UNKNOWN_PRICE
-    # Composer 2.5 list price, in USD per million tokens (capacity.py).
-    cost_usd = (tokens_in * 0.50 + tokens_out * 2.50) / 1_000_000
+    cache = {}
+    for key, aliases in (
+        ("cache_read", ("cacheReadTokens", "cache_read_input_tokens", "cache_read_tokens")),
+        ("cache_write", ("cacheWriteTokens", "cache_creation_input_tokens", "cache_write_tokens")),
+    ):
+        value = next((usage[a] for a in aliases if a in usage), 0)
+        if type(value) is not int or not 0 <= value < 2**63:
+            return None, None, None, CURSOR_CLI_NO_USAGE
+        cache[key] = value
+    price = COMPOSER_25_PRICE_PER_M
+    cost_usd = (
+        tokens_in * price["input"]
+        + cache["cache_read"] * price["cache_read"]
+        + cache["cache_write"] * price["cache_write"]
+        + tokens_out * price["output"]
+    ) / 1_000_000
     return tokens_in, tokens_out, cost_usd, CURSOR_CLI_COST_SOURCE
 
 
