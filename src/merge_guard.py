@@ -626,31 +626,38 @@ def guarded_merge(
     }
     if gate_result["blocked"]:
         return result
-    if require_fresh_base:
-        # Owner 2026-11-27: a merge goes to main only on the main its PR CI tested, give or take
-        # template-sync/floor commits that touch none of its files (ci_tested_merge's contract). Stale:
-        # merge main into the branch here (the drain runs while this gate is closed) and stop; the
-        # new head gets its own PR run, and the caller re-runs this with that head.
+
+    def stale_base(key: str) -> bool:
+        """Owner 2026-11-27: a merge goes to main only on the main its PR CI tested, give or take
+        template-sync/floor commits that touch none of its files (ci_tested_merge's contract). Stale:
+        merge main into the branch here (the drain runs while this gate is closed) and stop; the new
+        head gets its own PR run, and the caller re-runs this with that head."""
+        if not require_fresh_base:
+            return False
         repo, num = provision.parse_target(target)
         fresh = (freshness_fn or ci_tested_merge.freshness)(
             repo, int(num or 0), expected_head or ""
         )
-        result["base_freshness"] = fresh
-        if fresh.get("state") == "stale":
-            result["blocked"] = True
-            result["reason"] = fresh.get("line") or "base stale since CI"
-            if confirm_merge:
-                update = (update_branch_fn or ci_tested_merge.update_branch)(
-                    repo, int(num or 0), str(expected_head)
-                )
-                result["branch_update"] = update
-                result["reason"] += (
-                    "; merged the base into the branch: when CI is green on the new head, re-run with "
-                    "its --expected-head"
-                    if update.get("ok")
-                    else f"; update-branch failed ({update.get('detail')}): merge the base in by hand"
-                )
-            return result
+        result[key] = fresh
+        if fresh.get("state") != "stale":
+            return False
+        result["blocked"] = True
+        result["reason"] = fresh.get("line") or "base stale since CI"
+        if confirm_merge:
+            update = (update_branch_fn or ci_tested_merge.update_branch)(
+                repo, int(num or 0), str(expected_head)
+            )
+            result["branch_update"] = update
+            result["reason"] += (
+                "; merged the base into the branch: when CI is green on the new head, re-run with "
+                "its --expected-head"
+                if update.get("ok")
+                else f"; update-branch failed ({update.get('detail')}): merge the base in by hand"
+            )
+        return True
+
+    if stale_base("base_freshness"):
+        return result
     import review_loop
 
     def review_checkpoint():
@@ -708,6 +715,9 @@ def guarded_merge(
     if final_preflight_reason is not None:
         result["blocked"] = True
         result["reason"] = final_preflight_reason
+        return result
+    # Main can move during the panel and preflight; read it again as close to the merge as possible.
+    if stale_base("base_freshness_final"):
         return result
 
     loop_gate = review_checkpoint()

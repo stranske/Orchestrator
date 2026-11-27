@@ -44,12 +44,26 @@ MAX_DRIFT_COMMITS = 20
 _MERGE_FETCH = re.compile(r"\+([0-9a-f]{40}):refs/remotes/pull/(\d+)/merge")
 
 
+# GitHub returns at most this many files for one PR or commit; a list that long may be cut short.
+FILE_LIST_CEILING = 3000
+# Why the last reads failed (bounded, one line each), so "unmeasured" says what broke instead of
+# reading as "no CI evidence". Reset at the start of each public entry point.
+GH_ERRORS: list[str] = []
+
+
+def _note_error(args: list[str], detail: str) -> None:
+    what = next((a for a in args if a.startswith("repos/")), " ".join(args[:2]))
+    GH_ERRORS.append(f"{what.split('?')[0][:120]}: {' '.join(str(detail).split())[:200]}")
+
+
 def _gh(args: list[str], run_fn=subprocess.run) -> str | None:
     try:
         res = run_fn(["gh", *args], capture_output=True, text=True, timeout=120)
-    except Exception:
+    except Exception as exc:  # timeout, missing gh: recorded, never raised (non-blocking contract)
+        _note_error(args, f"{type(exc).__name__}: {exc}")
         return None
     if res.returncode != 0:
+        _note_error(args, res.stderr or f"exit {res.returncode}")
         return None
     return res.stdout or ""
 
@@ -102,21 +116,45 @@ def tested_merge(
     return None
 
 
+# Both paths of a rename count: a sync renaming a file the PR edits is not disjoint from it.
+_PATHS = ".filename, (.previous_filename // empty)"
+
+
 def _lines(out: str | None) -> set[str] | None:
-    return None if out is None else {line for line in out.splitlines() if line.strip()}
+    """Every path in a paginated file listing, or None when unreadable or possibly truncated."""
+    if out is None:
+        return None
+    lines = [line for line in out.splitlines() if line.strip()]
+    if len(lines) >= FILE_LIST_CEILING:
+        GH_ERRORS.append(
+            f"file list reached GitHub's {FILE_LIST_CEILING}-file ceiling; treated as incomplete"
+        )
+        return None
+    return set(lines)
 
 
 def pr_files(repo: str, pr_number: int, run_fn=subprocess.run) -> set[str] | None:
     return _lines(
         _gh(
-            ["api", "--paginate", f"repos/{repo}/pulls/{pr_number}/files", "--jq", ".[].filename"],
+            [
+                "api",
+                "--paginate",
+                f"repos/{repo}/pulls/{pr_number}/files",
+                "--jq",
+                f".[] | {_PATHS}",
+            ],
             run_fn,
         )
     )
 
 
 def commit_files(repo: str, sha: str, run_fn=subprocess.run) -> set[str] | None:
-    return _lines(_gh(["api", f"repos/{repo}/commits/{sha}", "--jq", ".files[].filename"], run_fn))
+    return _lines(
+        _gh(
+            ["api", "--paginate", f"repos/{repo}/commits/{sha}", "--jq", f".files[] | {_PATHS}"],
+            run_fn,
+        )
+    )
 
 
 def _line(fr: dict) -> str:
@@ -138,6 +176,10 @@ def _line(fr: dict) -> str:
     return f"base: unmeasured ({fr.get('reason')}); not blocking"
 
 
+def _with_errors(why: str) -> str:
+    return f"{why}; first read error: {GH_ERRORS[0]}" if GH_ERRORS else why
+
+
 def freshness(
     repo: str, pr_number: int, head_sha: str, *, branch: str = "main", run_fn=subprocess.run
 ) -> dict:
@@ -148,17 +190,21 @@ def freshness(
         fr["line"] = _line(fr)
         return fr
 
+    GH_ERRORS.clear()
     if not head_sha:
         return done(state="unmeasured", reason="no --expected-head")
     tm = tested_merge(repo, head_sha, run_fn=run_fn)
     if not tm:
-        return done(
-            state="unmeasured",
-            reason="no successful pull_request ci.yml run on this head with a readable test merge",
-        )
+        why = "no successful pull_request ci.yml run on this head with a readable test merge"
+        return done(state="unmeasured", reason=_with_errors(why), gh_errors=list(GH_ERRORS[:5]))
     cmp = _gh_json(["api", f"repos/{repo}/compare/{tm['base_sha']}...{branch}"], run_fn)
     if not isinstance(cmp, dict) or "ahead_by" not in cmp:
-        return done(state="unmeasured", reason="compare unreadable", tested_run=tm["url"])
+        return done(
+            state="unmeasured",
+            reason=_with_errors("compare unreadable"),
+            tested_run=tm["url"],
+            gh_errors=list(GH_ERRORS[:5]),
+        )
     behind = int(cmp.get("ahead_by") or 0)
     base = {"tested_run": tm["url"], "tested_base": tm["base_sha"], "behind": behind}
     if behind == 0:
@@ -196,7 +242,9 @@ def freshness(
 
 
 def update_branch(repo: str, pr_number: int, head_sha: str, run_fn=subprocess.run) -> dict:
-    """Merge the base branch into the PR branch (GitHub update-branch: a merge, never a rebase)."""
+    """Merge the base branch into the PR branch (GitHub update-branch: a merge, never a rebase).
+    `expected_head_sha` makes GitHub refuse if the branch moved since this head was judged."""
+    GH_ERRORS.clear()
     out = _gh(
         [
             "api",
@@ -208,18 +256,26 @@ def update_branch(repo: str, pr_number: int, head_sha: str, run_fn=subprocess.ru
         ],
         run_fn,
     )
-    return {"ok": out is not None, "detail": (out or "update-branch failed")[:300]}
+    if out is None:
+        return {"ok": False, "detail": _with_errors("update-branch failed")[:300]}
+    return {"ok": True, "detail": out[:300]}
 
 
 def deploy_reuse(repo: str, sha: str, *, run_fn=subprocess.run) -> dict:
     """May main commit `sha` deploy on a green PR run instead of its own main run? Yes when its tree is
     the tree that run tested, or when it is a floor reconcile (only FLOOR_FILE) on top of such a commit.
     """
+    GH_ERRORS.clear()
     commit = _gh_json(["api", f"repos/{repo}/commits/{sha}"], run_fn)
     if not isinstance(commit, dict):
-        return {"reuse": False, "reason": "commit unreadable"}
+        return {"reuse": False, "reason": _with_errors("commit unreadable")}
     candidates = [(sha, commit, "")]
-    files = {f.get("filename") for f in commit.get("files") or []}
+    files = {
+        path
+        for f in commit.get("files") or []
+        for path in (f.get("filename"), f.get("previous_filename"))
+        if path
+    }
     parents = commit.get("parents") or []
     if files == {FLOOR_FILE} and len(parents) == 1:
         parent = _gh_json(["api", f"repos/{repo}/commits/{parents[0]['sha']}"], run_fn)
@@ -238,10 +294,10 @@ def deploy_reuse(repo: str, sha: str, *, run_fn=subprocess.run) -> dict:
                     "url": tm["url"],
                     "detail": f"{cand_sha[:8]} has the tree PR #{pr.get('number')}'s CI tested{note}",
                 }
-    return {"reuse": False, "reason": "no green PR run tested this tree"}
+    return {"reuse": False, "reason": _with_errors("no green PR run tested this tree")}
 
 
-def main(argv: list[str]) -> int:
+def main(argv: list[str], run_fn=subprocess.run) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="cmd", required=True)
     f = sub.add_parser("freshness")
@@ -253,10 +309,10 @@ def main(argv: list[str]) -> int:
     d.add_argument("--sha", required=True)
     args = parser.parse_args(argv)
     if args.cmd == "freshness":
-        fr = freshness(args.repo, args.pr, args.head)
+        fr = freshness(args.repo, args.pr, args.head, run_fn=run_fn)
         print(json.dumps(fr))
         return 1 if fr["state"] == "stale" else 0
-    out = deploy_reuse(args.repo, args.sha)
+    out = deploy_reuse(args.repo, args.sha, run_fn=run_fn)
     print(json.dumps(out))
     return 0 if out["reuse"] else 1
 
