@@ -1137,10 +1137,17 @@ the sweep gave the merge of that PR on its own run rows: `durable` is PASS, `bro
 run `unjudgeable_merge` (excluded), and a `pending` merge waits for the sweep, its drain. The grade
 is an ordinary outcome row on the review run, so `relearn_quality` and the comparative LP read it
 like any other. `evidence`, `repair` and `followup` decisions (57% on that window) have no rule yet
-and are counted, never graded; until they do, the learners see `close` precision for review. The
-opener's judge, closer triage and every `offload` task-type run remain unmeasured.
-`review_outcomes.py probe` prints the chain per family and the pass number (graded outcomes on runs
-made after deploy). Kill switch `ORCH_DISABLE_STEPS=review-outcomes`; rollback `review_outcomes.py
+and are counted, never graded; until they do, the learners see `close` precision for review.
+The ledger read alone lost 27 of the first 40 judge runs after deploy (the closer replaces or drops
+the row before the hourly tick), so a second source reads both lanes' append-only `rounds.jsonl`
+every tick, history included: the item's `judge.run_id` (both lanes write it from 2026-11-27), or
+for older rounds the one same-agent `review` run on that issue inside the round (two are
+`ambiguous`, skipped). The opener's judge is the second producer: a `start` the round acted on is
+graded by the merge of the PR the opener linked to that issue, with the same rule; it grades the
+start together with the work that followed. Its `park` / `done`, closer triage and every `offload`
+task-type run remain unmeasured.
+`review_outcomes.py probe` prints the chain per family for both judges and the pass number (graded
+closer-judge outcomes on runs made after the first deploy). Kill switch `ORCH_DISABLE_STEPS=review-outcomes`; rollback `review_outcomes.py
 restore` deletes only its own rows (notes prefix). The loop diagram gains one feedback chip.
 
 A third, coarser feedback surface re-keys pattern mining to the fleet rather than to this tool's own
