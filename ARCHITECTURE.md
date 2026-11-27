@@ -2195,9 +2195,11 @@ stored as `caller_pinned` and the router's decision was dropped: 0 of 21 local i
 tilt's deploy carried it. Only 9 of those 21 were router decisions (4 opener starts, 2 local-loop
 rotations, 3 closer-core repairs); the other 12 were local-loop rounds that continue the PR's agent (6)
 and experiment arms (6). `router.route_decision_record(pick)` keeps the chosen agent, `route_source`,
-the pacing policy and the tilt; `choose_mode` returns it as `route_decision`; the opener, closer-core's
-repair and the local loop's rotated-to round pass it as `delegate --route-decision`;
-`dispatcher._routing_metadata` stores it on the run. The run stays `caller_pinned`, so exploration_review never credits the router for it.
+the pacing policy and the tilt; `choose_mode` returns it as `route_decision`; the local loop's
+rotated-to round passes it as `delegate --route-decision`; `dispatcher._routing_metadata` stores it on
+the run. The opener (`~/.codex/opener-core`) and closer-core's repair (`~/.codex/closer-core`) live
+outside this repository; they pass the flag only when the deployed mirror's `dispatcher.py` advertises
+`--route-decision`, so their runs carry decisions from this change's mirror deploy onward, never before. The run stays `caller_pinned`, so exploration_review never credits the router for it.
 Pass number (two criteria, no dates), read only from runs whose `routing_metadata.route_decision`
 carries a tilt: over the first 50, the share that went to an LP-assigned family exceeds the share the
 same draws would have given those families without the tilt (from `tier.base`) by at least half the

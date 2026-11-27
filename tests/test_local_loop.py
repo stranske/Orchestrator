@@ -655,3 +655,27 @@ def test_ended_prs_reads_every_page(monkeypatch):
     monkeypatch.setattr(ll, "_gh", gh)
     assert len(ll.GitHub().merged_prs()) == 101
     assert afters == [None, "after=c1"]
+
+
+def test_default_launch_passes_route_decision_on_the_command_line(monkeypatch, tmp_path):
+    """The production launch, not a fake: the rotated-to round's decision reaches `delegate` as JSON."""
+    seen: dict = {}
+
+    class Done:
+        stdout = '{"pid": 7}'
+        stderr = ""
+
+    def run(argv, **kwargs):
+        seen["argv"] = argv
+        return Done()
+
+    monkeypatch.setattr(ll, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(ll.subprocess, "run", run)
+    decision = {"chosen": "claude", "policy": "posterior*pacing"}
+    assert ll.default_launch("claude", "o/r#9", "prompt", "why", route_decision=decision) == {
+        "pid": 7
+    }
+    argv = seen["argv"]
+    assert json.loads(argv[argv.index("--route-decision") + 1]) == decision
+    ll.default_launch("claude", "o/r#9", "prompt", "why")
+    assert "--route-decision" not in seen["argv"]
