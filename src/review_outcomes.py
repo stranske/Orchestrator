@@ -25,9 +25,8 @@ THE RULE.
    the review run the same: durability `unjudgeable`, class `unjudgeable_merge`, excluded from
    learning. A merge still `pending` waits for the sweep (its own drain); no merged run row waits
    too, re-read every pass. Conflicting verdicts on one merge write nothing.
-3. `evidence`, `repair` and `followup` decisions have NO outcome rule yet. They are counted under
-   `awaiting_rule`, never graded. That is 57% of decisions on the window above, so `close`
-   precision is what the learners see for review until a rule for them lands.
+3. `evidence` and `repair` decisions have NO outcome rule. They are counted under `awaiting_rule`,
+   never graded (lever 4 below says why).
 
 ROUND RECORDS (2026-11-27, second unit). The ledger read lost 27 of the first 40 judge runs after
 deploy (18 of 26 `close`): the closer replaces or drops the row before the hourly tick reads it. Both
@@ -44,17 +43,35 @@ to that issue (`pr` in its target row), with the same rule as a closer `close`. 
 did not act on (format-unfixed, no capacity, would-start ...) is skipped as `not_acted`; an acted
 start with no linked PR yet waits (`no_pr_yet`, re-read every pass). This grades the start together
 with the work that followed it: a durable merge says the issue was ready to start; it does not
-separate the judge from the implementing agent. `park` and `done` have no rule yet.
+separate the judge from the implementing agent.
 
-The label is the durability sweep's, never a green check (CLAUDE.md §2). This module writes only
+LEVER 4 (2026-11-27). Two more decisions are graded, each by a GitHub fact, never by a check or by
+another judge (one GraphQL batch per pass, only for decisions not yet final; no answer writes nothing
+and is re-read next pass):
+- closer `followup` claims the remainder is real, separable work. The lane writes the issue it filed
+  into the round item that filed it (`followup`, and `route` when not `followup`). The run is that
+  item's `judge.run_id`, or the one decision by the item's agent in the latest round that judged the
+  same issue and PR, when it is a `followup` (else `followup_unattributed`). Graded by the filed
+  issue: closed `NOT_PLANNED` / `DUPLICATE` is FAIL (durability `abandoned`); closed by merged PRs
+  whose merges the sweep judged `durable` is PASS; open, closed with no merged PR, or a merge still
+  pending wait; a filed merge that failed is not graded (that grades the implementer). A `[backlog]`
+  route is parked by design and has no rule; a `followup` the lane never filed is `followup_not_acted`.
+  Confound, stated: "an agent implemented it and it held" does not prove the remainder was needed.
+- opener `done` (acted: `closed-done`) claims the issue was already delivered. A reopen at or after
+  the close is FAIL (`reopened`); closed for the sweep's `GRACE_DAYS` with no reopen is PASS
+  (`durable`); younger waits.
+`park`, `repair`, `evidence`, and the model's raw answer before the host's downgrade have no rule:
+see the lever-4 concept note for why.
+
+The label is the durability sweep's or GitHub's issue state, never a green check (CLAUDE.md §2). This module writes only
 outcome rows it owns (notes start with `NOTE_PREFIX`) and never touches another writer's row.
 Kill switch: `ORCH_DISABLE_STEPS=review-outcomes`. Rollback: `restore` deletes the outcome rows
 this module wrote; `review_decisions` is additive.
 
 CLI:
   python3 src/review_outcomes.py run [--json]       ingest + label (the tick's step)
-  python3 src/review_outcomes.py probe [--since TS] the value chain and the pass number
-  (closer runs after PASS_SINCE)
+  python3 src/review_outcomes.py probe [--since TS] the value chain, one line per graded rule
+  (`rule <lane> <decision>: decisions N, graded N`), and the pass number (closer runs after PASS_SINCE)
   python3 src/review_outcomes.py restore            delete this module's outcome rows
 """
 
@@ -78,9 +95,14 @@ NOTE_PREFIX = "review outcome (closer-judge): "
 OPENER_NOTE_PREFIX = "review outcome (opener-judge): "
 NOTE_PREFIXES = {PRODUCER: NOTE_PREFIX, OPENER: OPENER_NOTE_PREFIX}
 DECISIONS = frozenset({"close", "evidence", "repair", "followup"})
-GRADED_DECISIONS = frozenset({"close"})
+GRADED_DECISIONS = frozenset({"close", "followup"})
 OPENER_DECISIONS = frozenset({"start", "park", "done"})
-GRADED = {PRODUCER: GRADED_DECISIONS, OPENER: frozenset({"start"})}
+GRADED = {PRODUCER: GRADED_DECISIONS, OPENER: frozenset({"start", "done"})}
+# Decisions graded by the durability the sweep gave the merge in `review_of` (the first rule).
+MERGE_GRADED = {PRODUCER: frozenset({"close"}), OPENER: frozenset({"start"})}
+# GitHub's close reasons that say the filed follow-up was not work worth doing.
+NOT_DONE_REASONS = frozenset({"NOT_PLANNED", "DUPLICATE"})
+GH_BATCH = 40
 # The round action that means the opener acted on the decision; any other is `not_acted`.
 OPENER_ACTED = {"start": "start", "park": "park", "done": "closed-done"}
 TARGET_RE = re.compile(r"^(?P<repo>[\w.-]+/[\w.-]+)#(?P<issue>\d+)$")
@@ -358,62 +380,306 @@ def _owned(c, run_id: str):
     return row, str(row[3] or "").startswith(tuple(NOTE_PREFIXES.values()))
 
 
-def label() -> Counter:
-    """Grade every recorded decision that has an outcome rule; idempotent."""
+def _write(c, run_id: str, verdict, durability: str, failure_class, notes: str, counts: Counter):
+    """Write (or re-write) this module's outcome row for `run_id`; never another writer's row."""
+    existing, owned = _owned(c, run_id)
+    if existing is not None and not owned:
+        counts["foreign_outcome"] += 1
+        return
+    if existing is not None and tuple(existing[:3]) == (verdict, durability, failure_class):
+        counts["graded" if verdict else "excluded"] += 1
+        return
+    if existing is not None:  # the evidence changed: replace, including NULLs
+        c.execute(
+            "UPDATE outcomes SET adjudicated_verdict=?, durability=?, failure_class=?, "
+            "failure_class_origin=?, notes=?, durability_checked_ts=? WHERE run_id=?",
+            (
+                verdict,
+                durability,
+                failure_class,
+                "own" if failure_class else None,
+                notes,
+                int(time.time()),
+                run_id,
+            ),
+        )
+    else:
+        feedback._record_outcome_in_conn(
+            c,
+            run_id,
+            adjudicated_verdict=verdict,
+            durability=durability,
+            notes=notes,
+            failure_class=failure_class,
+        )
+    counts["written"] += 1
+    counts["graded" if verdict else "excluded"] += 1
+
+
+def _grace_seconds() -> int:
+    # ONE constant with the sweep: a `done` holds for as long as a merge must hold to be durable.
+    from durability_sweep import GRACE_DAYS
+
+    return int(GRACE_DAYS) * 86400
+
+
+def acted_followups(c, state: Path | None = None) -> tuple[dict, Counter]:
+    """{run_id: (follow-up issue, route)} for every closer `followup` decision the lane acted on.
+
+    The closer writes the filed issue into the round item that filed it (`action` `followup`,
+    `followup` the issue number, `route` when it is not `followup`). That item names the run when
+    the lane recorded `judge.run_id`; before that, the run is the latest decision recorded for the
+    same issue and PR at or before the round, and only when it is this `followup`, by the agent the
+    item names. Anything else is `unattributed`, never guessed."""
+    state = state or closer_state()
     counts: Counter = Counter()
+    out: dict = {}
+    for round_ts, _previous, item in _round_items(state, counts):
+        judge = item["judge"]
+        if item.get("action") != "followup" or judge.get("decision") != "followup":
+            continue
+        number, target, pr = item.get("followup"), str(item.get("target") or ""), item.get("pr")
+        match = TARGET_RE.match(target)
+        if not match or not str(number).isdigit() or not str(pr).isdigit():
+            counts["followup_malformed"] += 1
+            continue
+        run_id = judge.get("run_id")
+        if not run_id:
+            # Every decision of the latest round that judged this issue and PR (a weak and a strong
+            # judge can share one round); exactly one must be this agent's `followup`.
+            rows = c.execute(
+                "SELECT d.run_id, d.decision, r.agent FROM review_decisions d "
+                "JOIN runs r ON r.run_id=d.run_id WHERE d.producer=? AND lower(d.subject_id)=? "
+                "AND d.review_of=? AND d.judged_ts=(SELECT MAX(judged_ts) FROM review_decisions "
+                "WHERE producer=? AND lower(subject_id)=? AND review_of=? AND judged_ts<=?)",
+                (PRODUCER, target.lower(), f"{match['repo']}#{int(pr)}") * 2 + (round_ts,),
+            ).fetchall()
+            mine = [r for r in rows if r[2] == judge.get("provider")]
+            if len(mine) != 1 or mine[0][1] != "followup":
+                counts["followup_unattributed"] += 1
+                continue
+            run_id = mine[0][0]
+        filed = (f"{match['repo']}#{int(number)}", str(item.get("route") or "followup"))
+        if out.setdefault(run_id, filed) != filed:
+            counts["followup_conflict"] += 1
+            out[run_id] = None
+    return {k: v for k, v in out.items() if v}, counts
+
+
+_ISSUE_FIELDS = (
+    "state stateReason closedAt "
+    "timelineItems(itemTypes:[REOPENED_EVENT,CLOSED_EVENT],last:50){nodes{__typename "
+    "... on ReopenedEvent{createdAt} ... on ClosedEvent{createdAt}}} "
+    "closedByPullRequestsReferences(first:25,includeClosedPrs:true){pageInfo{hasNextPage} "
+    "nodes{number merged repository{nameWithOwner}}}"
+)
+
+
+def _gh_graphql(query: str):
+    import subprocess
+
+    try:
+        r = subprocess.run(
+            ["gh", "api", "graphql", "-f", "query=" + query],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        return json.loads(r.stdout).get("data") if r.returncode == 0 else None
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None
+
+
+def issue_fates(issues, *, _gh=None) -> dict:
+    """{`repo#n`: issue record, or None when GitHub did not answer} in batches of GH_BATCH."""
+    gh = _gh or _gh_graphql
+    keys = sorted(set(issues))
+    out: dict = {}
+    for i in range(0, len(keys), GH_BATCH):
+        chunk = keys[i : i + GH_BATCH]
+        parts = []
+        for k, key in enumerate(chunk):
+            repo, number = key.rsplit("#", 1)
+            owner, name = repo.split("/", 1)
+            parts.append(
+                f'i{k}: repository(owner:"{owner}",name:"{name}"){{issue(number:{int(number)})'
+                f"{{{_ISSUE_FIELDS}}}}}"
+            )
+        data = gh("query{" + " ".join(parts) + "}")
+        for k, key in enumerate(chunk):
+            node = (data or {}).get(f"i{k}") if isinstance(data, dict) else None
+            out[key] = node.get("issue") if isinstance(node, dict) else None
+    return out
+
+
+def _gh_ts(value) -> int | None:
+    return _round_ts(str(value or "").replace(".000Z", "Z"))
+
+
+def grade_done(issue: dict | None, judged_ts: int, now: int, grace: int):
+    """(verdict, durability, why) for an acted opener `done`, or (None, state, why) to wait."""
+    if not issue:
+        return None, "gh_unanswered", ""
+    events = [
+        (n.get("__typename"), _gh_ts(n.get("createdAt")))
+        for n in issue["timelineItems"]["nodes"]
+        if n
+    ]
+    # The judge's close is the last close at or before the round that recorded it (the round's
+    # timestamp is written after the close); a reopen counts from that close on, never before it.
+    closes = [ts for kind, ts in events if kind == "ClosedEvent" and ts is not None]
+    anchor = max((ts for ts in closes if ts <= judged_ts), default=judged_ts)
+    reopens = [
+        ts for kind, ts in events if kind == "ReopenedEvent" and ts is not None and ts >= anchor
+    ]
+    if reopens or issue.get("state") == "OPEN":
+        when = time.strftime("%Y-%m-%d", time.gmtime(min(reopens))) if reopens else "since"
+        return (
+            "FAIL",
+            "reopened",
+            f"the issue was reopened ({when}) after the judge closed it as done",
+        )
+    if now - judged_ts < grace:
+        return None, "done_in_grace", ""
+    return (
+        "PASS",
+        "durable",
+        f"the issue stayed closed {grace // 86400} days after the judge closed it",
+    )
+
+
+def grade_followup(c, filed: str, issue: dict | None):
+    """(verdict, durability, failure_class, why) for a filed follow-up, or (None, state, ...) to wait."""
+    if not issue:
+        return None, "gh_unanswered", None, ""
+    if issue.get("state") != "CLOSED":
+        return None, "followup_open", None, ""
+    closed = time.strftime("%Y-%m-%d", time.gmtime(_gh_ts(issue.get("closedAt")) or 0))
+    reason = str(issue.get("stateReason") or "")
+    if reason in NOT_DONE_REASONS:
+        return "FAIL", "abandoned", None, f"{filed} was closed {reason.lower()} on {closed}"
+    closing = issue["closedByPullRequestsReferences"]
+    if (closing.get("pageInfo") or {}).get("hasNextPage"):
+        return None, "closing_prs_truncated", None, ""  # never grade from part of the list
+    repo = filed.rsplit("#", 1)[0]
+    prs = sorted(
+        {
+            # a PR in another repository can close the issue: keep the PR's own repository
+            f"{(n.get('repository') or {}).get('nameWithOwner') or repo}#{int(n['number'])}"
+            for n in closing["nodes"]
+            if n and n["merged"]
+        }
+    )
+    if not prs:
+        return None, "closed_without_merge", None, ""
+    verdicts = {pr: merge_verdict(c, filed, pr) for pr in prs}
+    states = {state for state, _d in verdicts.values()}
+    for waiting in ("conflict", "pending", "no_merge_row"):
+        if waiting in states:
+            return None, waiting, None, ""
+    finals = {d for state, d in verdicts.values() if state == "final"}
+    names = ", ".join(prs)
+    if states == {"final"} and finals == {"durable"}:
+        return "PASS", "durable", None, f"{filed} was closed by merged {names}, judged durable"
+    if finals - {"durable"}:
+        # The filed work merged and did not hold: that grades the implementer, not the claim that
+        # the remainder was real work. No grade.
+        return None, "followup_merge_failed", None, ""
+    return None, "unjudgeable", feedback.UNJUDGEABLE_MERGE, f"the merge of {names} is unjudgeable"
+
+
+def label(
+    state: Path | None = None, *, filed: dict | None = None, now: int | None = None, _gh=None
+) -> Counter:
+    """Grade every recorded decision that has an outcome rule; idempotent.
+
+    `filed` is `acted_followups`' map; without it, it is read from the closer's round records."""
+    counts: Counter = Counter()
+    now = int(time.time()) if now is None else int(now)
     with feedback._conn() as c:
+        if filed is None:
+            filed, more = acted_followups(c, state)
+            counts.update({k: v for k, v in more.items() if k.startswith("followup_")})
         decisions = c.execute(
-            "SELECT run_id, producer, subject_id, review_of, decision FROM review_decisions ORDER BY run_id"
+            "SELECT run_id, producer, subject_id, review_of, decision, judged_ts FROM review_decisions "
+            "ORDER BY run_id"
         ).fetchall()
-        for run_id, producer, subject_id, review_of, decision in decisions:
-            if decision not in GRADED.get(producer, ()) or not review_of:
+        done_rows, followup_rows = [], []
+        for run_id, producer, subject_id, review_of, decision, judged_ts in decisions:
+            if decision not in GRADED.get(producer, ()):
                 counts[f"awaiting_rule:{decision}"] += 1
                 continue
-            state, durability = merge_verdict(c, subject_id, review_of)
-            if state in {"pending", "no_merge_row", "conflict"}:
-                counts[state] += 1
+            if decision in MERGE_GRADED.get(producer, ()):
+                if not review_of:
+                    counts[f"awaiting_rule:{decision}"] += 1
+                    continue
+                merge_state, durability = merge_verdict(c, subject_id, review_of)
+                if merge_state in {"pending", "no_merge_row", "conflict"}:
+                    counts[merge_state] += 1
+                    continue
+                if merge_state == "final":
+                    verdict = "PASS" if durability == "durable" else "FAIL"
+                    failure_class = None
+                else:
+                    verdict, failure_class = None, feedback.UNJUDGEABLE_MERGE
+                notes = (
+                    f"{NOTE_PREFIXES[producer]}{decision} on {subject_id}; the merge of {review_of} "
+                    f"was judged {durability} by the durability sweep"
+                )
+                _write(c, run_id, verdict, durability, failure_class, notes, counts)
                 continue
-            if state == "final":
-                verdict = "PASS" if durability == "durable" else "FAIL"
-                failure_class = None
-            else:
-                verdict, failure_class = None, feedback.UNJUDGEABLE_MERGE
             existing, owned = _owned(c, run_id)
-            if existing is not None and not owned:
-                counts["foreign_outcome"] += 1
+            if owned and (existing[0] or existing[2]):  # final: the issue is not re-read
+                counts["graded"] += 1
                 continue
-            if existing is not None and tuple(existing[:3]) == (verdict, durability, failure_class):
-                counts["graded" if verdict else "excluded"] += 1
-                continue
-            notes = (
-                f"{NOTE_PREFIXES[producer]}{decision} on {subject_id}; the merge of {review_of} was judged "
-                f"{durability} by the durability sweep"
-            )
-            if existing is not None:  # the sweep re-judged the merge: replace, including NULLs
-                c.execute(
-                    "UPDATE outcomes SET adjudicated_verdict=?, durability=?, failure_class=?, "
-                    "failure_class_origin=?, notes=?, durability_checked_ts=? WHERE run_id=?",
-                    (
-                        verdict,
-                        durability,
-                        failure_class,
-                        "own" if failure_class else None,
-                        notes,
-                        int(time.time()),
-                        run_id,
-                    ),
-                )
+            if producer == OPENER:  # `done`: acted rows only (ingest_rounds keeps closed-done)
+                if judged_ts is None:
+                    counts["done_no_time"] += 1
+                    continue
+                done_rows.append((run_id, subject_id, int(judged_ts)))
+            elif run_id not in filed:
+                counts["followup_not_acted"] += 1  # judged, never filed (or filed unattributably)
+            elif filed[run_id][1] != "followup":
+                # A `[backlog]` issue is parked by design (no agent, nothing waits on it): its fate
+                # says nothing about whether the remainder was real. No rule.
+                counts["followup_backlog_route"] += 1
             else:
-                feedback._record_outcome_in_conn(
-                    c,
-                    run_id,
-                    adjudicated_verdict=verdict,
-                    durability=durability,
-                    notes=notes,
-                    failure_class=failure_class,
-                )
-            counts["written"] += 1
-            counts["graded" if verdict else "excluded"] += 1
+                followup_rows.append((run_id, subject_id, filed[run_id][0]))
+        if not done_rows and not followup_rows:
+            return counts
+        c.commit()  # end the write transaction: the GitHub read must not hold the Brain's lock
+        fates = issue_fates(
+            [s for _r, s, _t in done_rows] + [f for _r, _s, f in followup_rows], _gh=_gh
+        )
+        grace = _grace_seconds()
+        for run_id, subject_id, judged_ts in done_rows:
+            verdict, durability, why = grade_done(fates.get(subject_id), judged_ts, now, grace)
+            if verdict is None:
+                counts[durability] += 1
+                continue
+            _write(
+                c,
+                run_id,
+                verdict,
+                durability,
+                None,
+                f"{OPENER_NOTE_PREFIX}done on {subject_id}; {why}",
+                counts,
+            )
+        for run_id, subject_id, issue in followup_rows:
+            verdict, durability, failure_class, why = grade_followup(c, issue, fates.get(issue))
+            if verdict is None and failure_class is None:
+                counts[durability] += 1
+                continue
+            _write(
+                c,
+                run_id,
+                verdict,
+                durability,
+                failure_class,
+                f"{NOTE_PREFIX}followup on {subject_id}; {why}",
+                counts,
+            )
     return counts
 
 
@@ -422,7 +688,7 @@ def run(state: Path | None = None, opener: Path | None = None) -> dict:
         "ingest": dict(ingest(state)),
         "rounds": dict(ingest_rounds(PRODUCER, state)),
         "opener_rounds": dict(ingest_rounds(OPENER, opener)),
-        "label": dict(label()),
+        "label": dict(label(state)),
     }
 
 
@@ -463,6 +729,8 @@ def _chain(c, producer: str, state: Path, since: int) -> tuple[dict, Counter]:
             if verdict:
                 row["outcome"] += 1
                 row["pass" if verdict == "PASS" else "fail"] += 1
+                row[f"outcome:{decision}"] += 1
+                row[f"{'pass' if verdict == 'PASS' else 'fail'}:{decision}"] += 1
                 row["post_deploy_outcome"] += post
             else:
                 row["excluded"] += 1
@@ -527,6 +795,14 @@ def format_probe(result: dict) -> str:
         _summary("opener judge", "start", opener["totals"]),
         *_family_lines(opener["families"], "start"),
     ]
+    for name, producer_totals in (("closer", t), ("opener", opener["totals"])):
+        for decision in sorted(GRADED[PRODUCER if name == "closer" else OPENER]):
+            lines.append(
+                f"rule {name} {decision}: decisions {producer_totals.get('decision:' + decision, 0)}, "
+                f"graded {producer_totals.get('outcome:' + decision, 0)} "
+                f"(PASS {producer_totals.get('pass:' + decision, 0)}, "
+                f"FAIL {producer_totals.get('fail:' + decision, 0)})"
+            )
     pn = result["pass_number"]
     lines.append(
         f"post-deploy ingest coverage: decisions {t.get('post_deploy_decisions', 0)} of "
@@ -569,7 +845,13 @@ def main(argv=None) -> int:
                 f"graded {lab.get('graded', 0)} (written {lab.get('written', 0)}), excluded {lab.get('excluded', 0)}; "
                 f"awaiting the sweep {lab.get('pending', 0)}, drainable {lab.get('pending', 0)}; "
                 f"no merged run row {lab.get('no_merge_row', 0)} (re-read every pass); "
-                f"conflict {lab.get('conflict', 0)}; no outcome rule {awaiting_rule}"
+                f"conflict {lab.get('conflict', 0)}; no outcome rule {awaiting_rule}; "
+                f"followup: open {lab.get('followup_open', 0)} (drains when the issue closes), "
+                f"backlog route {lab.get('followup_backlog_route', 0)}, not acted "
+                f"{lab.get('followup_not_acted', 0)}, closed without a merge "
+                f"{lab.get('closed_without_merge', 0)}, merge failed {lab.get('followup_merge_failed', 0)}; "
+                f"done: in grace {lab.get('done_in_grace', 0)} (drains at the sweep's grace); "
+                f"GitHub unanswered {lab.get('gh_unanswered', 0)} (re-read every pass)"
             )
         return 0
     if args.cmd == "probe":

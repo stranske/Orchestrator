@@ -1144,9 +1144,15 @@ every tick, history included: the item's `judge.run_id` (both lanes write it fro
 for older rounds the one same-agent `review` run on that issue inside the round (two are
 `ambiguous`, skipped). The opener's judge is the second producer: a `start` the round acted on is
 graded by the merge of the PR the opener linked to that issue, with the same rule; it grades the
-start together with the work that followed. Its `park` / `done`, closer triage and every `offload`
-task-type run remain unmeasured.
-`review_outcomes.py probe` prints the chain per family for both judges and the pass number (graded
+start together with the work that followed. Lever 4 (2026-11-27) grades two more decisions by a
+GitHub fact (one GraphQL batch per pass, only for decisions not yet final; no answer writes nothing):
+a closer `followup` by the fate of the issue it filed (the lane writes the number into the filing
+round item) — closed `NOT_PLANNED` / `DUPLICATE` is FAIL (`abandoned`), closed by merged PRs the sweep
+judged `durable` is PASS, open or pending waits, a failed follow-up merge is not graded, a `[backlog]`
+route has no rule; and an acted opener `done` by a reopen — reopened is FAIL, closed for the sweep's
+`GRACE_DAYS` is PASS. Closer `repair` / `evidence`, opener `park`, closer triage and every `offload`
+task-type run remain ungraded (reasons in the lever-4 concept note).
+`review_outcomes.py probe` prints the chain per family for both judges, one line per graded rule, and the pass number (graded
 closer-judge outcomes on runs made after the first deploy). Kill switch `ORCH_DISABLE_STEPS=review-outcomes`; rollback `review_outcomes.py
 restore` deletes only its own rows (notes prefix). The loop diagram gains one feedback chip.
 
