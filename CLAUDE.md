@@ -23,7 +23,9 @@ rules for anyone (human or agent) *changing* it.
 
 Every repository-local terminal merge, including one requested by a successor task prompt, must use
 `python3 src/merge_guard.py owner/repo#N --expected-head <sha> --confirm-merge`. Direct `gh pr merge`
-or `gh pr merge --auto` is forbidden as a fallback. If the guard blocks, stop: do not bypass it. The
+or `gh pr merge --auto` is forbidden as a fallback. If the guard blocks, stop: do not bypass it. A `base:` block
+(main moved since the PR's CI tested it) is the one the guard drains itself: it merges main into the branch;
+wait for CI on the new head and re-run with that head. The
 guard re-reads every GraphQL review-thread page, exact-head checks, and the seven-minute review floor
 immediately before mutation, then pins the merge with `--match-head-commit`.
 

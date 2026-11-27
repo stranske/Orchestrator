@@ -93,7 +93,7 @@
 <rect class="role" x="560" y="342" width="76" height="24" rx="4"/><text class="ct" x="598" y="358" text-anchor="middle">ux_review</text>
 <!-- ADVERSARIAL PANEL AT THE TERMINAL MERGE (2026-10-05). Until this date the tick ran it before a
      remote delegation that no closer PR can reach, so it sat in Delegate with no consumer. It now
-     runs at merge_guard's merge gate, once per (PR, head SHA), advisory. Since 2026-10-12 it runs
+     runs at merge_guard's merge gate, once per (PR, head SHA), advisory. The CLI merges only onto the main its PR CI tested (template/floor drift exempt), else merges main into the branch. Since 2026-10-12 it runs
      detached after the merge with one router-chosen reviewer and files a follow-up on BLOCKED. -->
 <g>
 <title>adversarial panel</title>
