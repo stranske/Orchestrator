@@ -118,6 +118,7 @@
 <!-- outcome -->
 <line class="arrow" x1="348" y1="453" x2="348" y2="468" marker-end="url(#ah)"/>
 <text class="ts" x="358" y="462">outcome: merge · durability · verifier</text>
+<desc id="review-outcomes">Review outcomes (2026-11-27, P3 part B): review runs are offloads, and the closer judge is their largest caller. Each hourly tick, review_outcomes.py copies every judgement the closer ledger stores with a Brain run id into the Brain table review_decisions (decision, repo#issue, repo#pr from the ledger key), then grades a close decision by the durability the sweep gave the merge of that PR: durable is PASS, a failed merge FAIL, an unjudgeable merge excluded from learning, a pending merge waits. Repair, followup and evidence decisions have no outcome rule yet and are never graded. The grades enter feedback.py as ordinary outcome rows on the review runs, so relearn and the comparative LP see review by family.</desc>
 
 <!-- feedback band -->
 <g id="comparative-routing-shadow">
@@ -130,6 +131,7 @@
 <rect class="rail" x="118" y="502" width="104" height="18" rx="4"/><text class="ct" x="170" y="514" text-anchor="middle">selection weights</text>
 <rect class="role" x="232" y="502" width="116" height="18" rx="4"/><text class="ct" x="290" y="514" text-anchor="middle">role:&lt;name&gt; + source</text>
 <rect class="rail" x="360" y="502" width="152" height="18" rx="4"/><text class="ct" x="436" y="514" text-anchor="middle">fleet edges · fixtures 0</text>
+<rect class="rail" x="518" y="502" width="114" height="18" rx="4"/><text class="ct" x="575" y="514" text-anchor="middle">review ← swept merge</text>
 
 <!-- return arc -->
 <path class="return" d="M56,500 L32,500 Q28,500 28,496 L28,94 Q28,90 32,90 L56,90" marker-end="url(#ah)"/>

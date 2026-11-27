@@ -1106,6 +1106,27 @@ coverage of at least `MIN_COST_COVERAGE` of an agent's telemetry-eligible runs a
 traces read as UNMEASURED and are imputed from the agent's own task-type row; a priced cost subsumes
 the token term and is charged in row units so the tuned penalty survives the change of currency.
 
+**A review run is graded by what became of the merge it judged (2026-11-27, P3 part B).** Every
+`task_type='review'` run is an offload. On the live Brain, of the 2,017 such runs since 2026-11-10,
+34 had an outcome, all research-program word counts, so neither learner nor the comparative LP could
+rank families on review. The largest caller is closer-core's judge (838 of them): for an issue whose
+PR merged while the verifier did not PASS, it decides `close`, `evidence`, `repair` or `followup`, and
+the closer acts on it. The decision and the PR lived only in the closer's ledger row, dropped when the
+target completes, before the sweep judges the merge. `review_outcomes.py` (a rail, every tick, local
+reads only) copies each ledger judgement that carries a Brain run id into the Brain table
+`review_decisions` (decision, `repo#issue` and `repo#pr` from the ledger KEY, never prose; only for a
+`review` run whose own `subject_id` is that issue), then grades a `close` decision by the durability
+the sweep gave the merge of that PR on its own run rows: `durable` is PASS, `broke_later` /
+`reverted` / `reopened` / `reworked` / `abandoned` is FAIL, an `unjudgeable` merge gives the review
+run `unjudgeable_merge` (excluded), and a `pending` merge waits for the sweep, its drain. The grade
+is an ordinary outcome row on the review run, so `relearn_quality` and the comparative LP read it
+like any other. `evidence`, `repair` and `followup` decisions (57% on that window) have no rule yet
+and are counted, never graded; until they do, the learners see `close` precision for review. The
+opener's judge, closer triage and every `offload` task-type run remain unmeasured.
+`review_outcomes.py probe` prints the chain per family and the pass number (graded outcomes on runs
+made after deploy). Kill switch `ORCH_DISABLE_STEPS=review-outcomes`; rollback `review_outcomes.py
+restore` deletes only its own rows (notes prefix). The loop diagram gains one feedback chip.
+
 A third, coarser feedback surface re-keys pattern mining to the fleet rather than to this tool's own
 completion events (which require a research-subject identity the fleet's work never carries, so the
 miner accepted 0 of 5,770 events). `fleet_shapes.py` — a rail, daily — groups merged fleet PRs by

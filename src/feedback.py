@@ -706,6 +706,14 @@ CREATE TABLE IF NOT EXISTS run_pushes (
   window_start INTEGER NOT NULL, window_end INTEGER NOT NULL,
   branches_json TEXT NOT NULL, recorded_ts INTEGER NOT NULL
 );
+-- 2026-11-27 (P3 part B): the decision a REVIEW offload run made and the change it was about, so the
+-- run can be graded by what became of that change (review_outcomes.py). One row per run; the writer
+-- reads it from the producer's own structured record (the closer's ledger key `repo#issue@pr` and
+-- the judgement it stored with the run's id), never from prose. `review_of` is `owner/repo#PR`.
+CREATE TABLE IF NOT EXISTS review_decisions (
+  run_id TEXT PRIMARY KEY, producer TEXT NOT NULL, subject_id TEXT NOT NULL,
+  review_of TEXT NOT NULL, decision TEXT NOT NULL, judged_ts INTEGER, recorded_ts INTEGER NOT NULL
+);
 """
     + PROFILE_TRIAL_INGESTS_TABLE
     + ";"

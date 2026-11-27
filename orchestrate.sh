@@ -1082,6 +1082,15 @@ if _cadence_due durability-sweep && _attempt_ok durability-sweep; then
     if python3 "$ORCH/durability_sweep.py" >> "$STAMP_DIR/durability-sweep.log" 2>&1; then _mark_success durability-sweep; else _mark_fail durability-sweep "see $STAMP_DIR/durability-sweep.log"; fi
   else echo "  [cadence] durability sweep SKIPPED — gh search budget shed or gh deferred (stamp untouched; retry next tick)"; fi
 fi
+# Review outcomes (P3 part B, every tick, local reads only). The closer's judge decisions live only in
+# its ledger rows, which are dropped when a target completes, days before the sweep above judges the
+# merge they were about. Copy each into the Brain (review_decisions), then grade `close` decisions by
+# that merge's swept durability. Every tick because the ledger keeps only a row's latest judgement.
+# Kill switch: ORCH_DISABLE_STEPS=review-outcomes. Rollback: review_outcomes.py restore.
+if _step_disabled review-outcomes; then :; else
+  python3 "$ORCH/review_outcomes.py" run 2>> "$STAMP_DIR/review-outcomes.log" \
+    | tee -a "$STAMP_DIR/review-outcomes.log" | sed 's/^/  [cadence] /' || true
+fi
 # M2 live (#643): adjudicate the newest persisted disputes once, certified from the merged commit,
 # shadow only. Daily, after the sweep above has written the truth the earlier advice is graded on.
 if _cadence_due adjudicator-live && _attempt_ok adjudicator-live; then
