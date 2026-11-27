@@ -5,11 +5,9 @@ name: Lane seat (hosted controller)
 # lanes `state` branch) is older than lane_state.HOSTED_STALE_AFTER (45 min). Ledgers travel on that branch, so a
 # hosted pass decides from the same state a local pass would. Design and stop rules:
 # Audits/closer-lane-2026-11/rebuild/HOSTED_SEAT_DESIGN.md (owner workspace).
-# Scheduled lanes: closer-core and sync-core. The owner accepted three clean hosted-alone passes out of four
-# planned. The Mac replayed all 56 journaled calls with zero rejected.
-# Opener-core is manual opt-in until one hosted judge call and one hosted opener start are observed. The
-# 2026-11-25 Linux shadow matched the Mac cap, demand, and eight decisions without exercising either action:
-# https://github.com/stranske/Orchestrator/actions/runs/45601106673/job/139159949563
+# Scheduled passes run closer, sync and opener in controller order under the shared seat lease.
+# The hosted opener judged and started Manager-Mosaic #172 during the Mac pause:
+# https://github.com/stranske/Orchestrator/actions/runs/45946442649
 # To retire the legacy Workflows Auto-Pilot handoff route after scheduling, verify one start per eligible
 # handoff across five handoffs, a hosted start during a local-seat outage, and parity through retry and restart.
 # Also verify that concurrent local and hosted wakes produce one shared claim and one start. Keep the handoff
@@ -36,7 +34,7 @@ on:
       lanes:
         description: comma-separated lanes (always run in the controller's order closer, sync, opener)
         type: string
-        default: closer-core,sync-core
+        default: closer-core,sync-core,opener-core
   pull_request:
     paths:
       - '.github/workflows/lane-seat.yml'
@@ -62,7 +60,7 @@ jobs:
       ORCH_LOCAL_AGENT_CAP: '0'
       # A lane joins the scheduled list only after its parity check: the same decisions as the local seat on the
       # same state at the same moment (HOSTED_SEAT_DESIGN.md).
-      LANES: ${{ github.event_name == 'workflow_dispatch' && inputs.lanes || 'closer-core,sync-core' }}
+      LANES: ${{ github.event_name == 'workflow_dispatch' && inputs.lanes || 'closer-core,sync-core,opener-core' }}
       ORCH_MIRROR: ${{ github.workspace }}/orch/src
       MODE: ${{ github.event_name == 'schedule' && 'apply' || github.event_name == 'pull_request' && 'shadow' || inputs.mode }}
       FORCE: ${{ github.event_name == 'pull_request' && 'true' || github.event_name == 'workflow_dispatch' && inputs.force && 'true' || 'false' }}
