@@ -144,7 +144,7 @@ def test_a_rejudged_merge_replaces_the_grade(brain):
     assert ro.run()["label"].get("written", 0) == 0  # idempotent once it matches
 
 
-@pytest.mark.parametrize("decision", ["repair", "followup", "evidence"])
+@pytest.mark.parametrize("decision", ["repair", "evidence"])
 def test_other_decisions_have_no_rule_and_are_never_graded(brain, decision):
     judge_run("offload:codex:6", agent="codex")
     ledger(brain, "offload:codex:6", decision)
@@ -407,3 +407,206 @@ def test_probe_counts_the_opener_chain_apart_from_the_pass_number(brain):
         "review outcomes (opener judge): judge runs 1; decision recorded 1; start 1; graded 1"
         in (ro.format_probe(res))
     )
+
+
+# --- lever 4: closer `followup` by the fate of the issue it filed; opener `done` by a reopen -----
+
+FILED = "stranske/Workflows#50"
+NOW = ts_of("2026-11-27T12:00:00Z")
+
+
+def fate(state="CLOSED", reason="COMPLETED", prs=(), reopened=()):
+    return {
+        "state": state,
+        "stateReason": reason if state == "CLOSED" else None,
+        "closedAt": "2026-11-20T00:00:00Z" if state == "CLOSED" else None,
+        "timelineItems": {"nodes": [{"createdAt": r} for r in reopened]},
+        "closedByPullRequestsReferences": {"nodes": [{"number": n, "merged": m} for n, m in prs]},
+    }
+
+
+def github(fates: dict, calls: list | None = None):
+    """A GraphQL stand-in answering `issue_fates`' aliased query from {`repo#n`: record}."""
+    import re
+
+    def gh(query):
+        if calls is not None:
+            calls.append(query)
+        out = {}
+        for alias, owner, name, number in re.findall(
+            r'(i\d+): repository\(owner:"([^"]+)",name:"([^"]+)"\)\{issue\(number:(\d+)\)', query
+        ):
+            out[alias] = {"issue": fates.get(f"{owner}/{name}#{number}")}
+        return out
+
+    return gh
+
+
+def filed_followup(brain, run_id="offload:gemini:60", *, provider="gemini", route=None, acted=True):
+    """A judged `followup` (an old round, no run id) and, a round later, the item that filed it."""
+    judge_run(run_id, agent=provider, ts=ts_of("2026-11-10T10:05:00Z"))
+    item = closer_item("followup", provider=provider)
+    filing = dict(item, action="followup", followup=int(FILED.rsplit("#", 1)[1]))
+    if route:
+        filing["route"] = route
+    rounds(
+        brain,
+        ("2026-11-10T10:00:00Z", []),
+        ("2026-11-10T10:15:00Z", [item]),
+        *([("2026-11-10T11:15:00Z", [filing])] if acted else []),
+    )
+    ro.ingest_rounds(ro.PRODUCER)
+
+
+def implemented(durability, pr=51):
+    """The filed follow-up's own merge, as the sweep judged it."""
+    run_id = f"keepalive:stranske/Workflows#{pr}:codex"
+    feedback.record_run(
+        run_id, f"stranske/Workflows#{pr}", "implement", "codex", pr_number=pr, source="keepalive"
+    )
+    feedback.record_outcome(run_id, adjudicated_verdict="PASS", merged=1, durability=durability)
+
+
+def test_a_followup_whose_filed_issue_merged_durably_is_a_pass(brain):
+    filed_followup(brain)
+    implemented("durable")
+    calls: list = []
+    out = ro.label(now=NOW, _gh=github({FILED: fate(prs=[(51, True), (52, False)])}, calls))
+    assert out["written"] == 1 and out["graded"] == 1
+    verdict, durability, fclass, notes = outcome("offload:gemini:60")
+    assert (verdict, durability, fclass) == ("PASS", "durable", None)
+    assert notes.startswith(ro.NOTE_PREFIX) and FILED in notes and "#51" in notes
+    assert feedback._is_success(durability, verdict, None)
+    # final: the issue is not read again
+    assert ro.label(now=NOW, _gh=github({}, calls)).get("written", 0) == 0
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("reason", ["NOT_PLANNED", "DUPLICATE"])
+def test_a_followup_whose_filed_issue_was_closed_not_done_is_a_fail(brain, reason):
+    filed_followup(brain)
+    ro.label(now=NOW, _gh=github({FILED: fate(reason=reason)}))
+    verdict, durability, fclass, notes = outcome("offload:gemini:60")
+    assert (verdict, durability, fclass) == ("FAIL", "abandoned", None)
+    assert reason.lower() in notes
+    assert not feedback._is_success(durability, verdict, None)
+
+
+@pytest.mark.parametrize(
+    "record, waits",
+    [
+        (fate(state="OPEN"), "followup_open"),
+        (fate(), "closed_without_merge"),
+        (fate(prs=[(51, True)]), "no_merge_row"),
+        (None, "gh_unanswered"),
+    ],
+)
+def test_a_followup_without_a_final_fate_waits_and_writes_nothing(brain, record, waits):
+    filed_followup(brain)
+    assert ro.label(now=NOW, _gh=github({FILED: record}))[waits] == 1
+    assert outcome("offload:gemini:60") is None
+
+
+def test_a_followup_whose_filed_work_merged_and_failed_is_not_graded(brain):
+    # A failed merge grades whoever implemented the follow-up, not the claim that it was real work.
+    filed_followup(brain)
+    implemented("reverted")
+    assert (
+        ro.label(now=NOW, _gh=github({FILED: fate(prs=[(51, True)])}))["followup_merge_failed"] == 1
+    )
+    assert outcome("offload:gemini:60") is None
+
+
+def test_a_backlog_route_and_an_unfiled_followup_have_no_rule(brain):
+    filed_followup(brain, route="backlog")
+    judge_run("offload:codex:61", agent="codex")  # judged followup, never filed
+    rounds(brain, ("2026-11-27T10:00:00Z", [closer_item("followup", run_id="offload:codex:61")]))
+    ro.ingest_rounds(ro.PRODUCER)
+    out = ro.label(now=NOW, _gh=github({FILED: fate(reason="NOT_PLANNED")}))
+    assert out["followup_backlog_route"] == 1 and out["followup_not_acted"] == 1
+    assert outcome("offload:gemini:60") is None
+
+
+def test_a_filing_is_never_credited_to_another_agents_judgement(brain):
+    # The latest decision on the issue is gemini's; the filing item names codex: unattributed.
+    filed_followup(brain)
+    rounds(
+        brain,
+        (
+            "2026-11-10T12:15:00Z",
+            [dict(closer_item("followup", provider="codex"), action="followup", followup=50)],
+        ),
+    )
+    with feedback._conn() as c:
+        filed, counts = ro.acted_followups(c)
+    assert set(filed) == {"offload:gemini:60"} and counts["followup_unattributed"] == 1
+
+
+def test_a_weak_and_a_strong_judge_in_one_round_are_told_apart_by_agent(brain):
+    judge_run("offload:gemini:63", ts=ts_of("2026-11-10T10:05:00Z"))
+    judge_run("offload:codex:64", agent="codex", ts=ts_of("2026-11-10T10:06:00Z"))
+    rounds(
+        brain,
+        ("2026-11-10T10:00:00Z", []),
+        (
+            "2026-11-10T10:15:00Z",
+            [closer_item("evidence"), closer_item("followup", provider="codex")],
+        ),
+        (
+            "2026-11-10T11:15:00Z",
+            [dict(closer_item("followup", provider="codex"), action="followup", followup=50)],
+        ),
+    )
+    ro.ingest_rounds(ro.PRODUCER)
+    with feedback._conn() as c:
+        assert ro.acted_followups(c)[0] == {"offload:codex:64": (FILED, "followup")}
+
+
+def test_a_filing_item_with_its_run_id_is_attributed_directly(brain):
+    judge_run("offload:claude:62", agent="claude")
+    item = closer_item("followup", provider="claude", run_id="offload:claude:62")
+    rounds(brain, ("2026-11-27T10:00:00Z", [dict(item, action="followup", followup=50)]))
+    ro.ingest_rounds(ro.PRODUCER)
+    with feedback._conn() as c:
+        assert ro.acted_followups(c)[0] == {"offload:claude:62": (FILED, "followup")}
+
+
+def opener_done(run_id="offload:codex:70", when="2026-11-10T10:00:00Z"):
+    opener_run(run_id)
+    rounds(ro.opener_state(), (when, [opener_item("done", "closed-done", run_id)]))
+    ro.ingest_rounds(ro.OPENER)
+
+
+def test_an_opener_done_that_stays_closed_past_the_grace_is_a_pass(brain):
+    opener_done()
+    ro.label(now=NOW, _gh=github({SUBJECT: fate()}))
+    verdict, durability, _f, notes = outcome("offload:codex:70")
+    assert (verdict, durability) == ("PASS", "durable")
+    assert notes.startswith(ro.OPENER_NOTE_PREFIX) and "7 days" in notes
+
+
+def test_an_opener_done_that_was_reopened_is_a_fail(brain):
+    opener_done()
+    ro.label(now=NOW, _gh=github({SUBJECT: fate(reopened=["2026-11-11T09:00:00Z"])}))
+    assert outcome("offload:codex:70")[:2] == ("FAIL", "reopened")
+
+
+def test_an_opener_done_inside_the_grace_waits(brain):
+    opener_done(when="2026-11-25T10:00:00Z")
+    assert ro.label(now=NOW, _gh=github({SUBJECT: fate()}))["done_in_grace"] == 1
+    assert outcome("offload:codex:70") is None
+    # an earlier reopen (before the judge closed it) is not this close's reopen
+    opener_done("offload:codex:71", when="2026-11-10T10:00:00Z")
+    with feedback._conn() as c:
+        c.execute("DELETE FROM review_decisions WHERE run_id='offload:codex:70'")
+    ro.label(now=NOW, _gh=github({SUBJECT: fate(reopened=["2026-11-01T00:00:00Z"])}))
+    assert outcome("offload:codex:71")[:2] == ("PASS", "durable")
+
+
+def test_the_probe_prints_each_rule_including_a_drained_zero(brain):
+    filed_followup(brain)
+    implemented("durable")
+    ro.label(now=NOW, _gh=github({FILED: fate(prs=[(51, True)])}))
+    text = ro.format_probe(ro.probe())
+    assert "rule closer followup: decisions 1, graded 1 (PASS 1, FAIL 0)" in text
+    assert "rule opener done: decisions 0, graded 0 (PASS 0, FAIL 0)" in text
