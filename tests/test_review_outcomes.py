@@ -415,13 +415,23 @@ FILED = "stranske/Workflows#50"
 NOW = ts_of("2026-11-27T12:00:00Z")
 
 
-def fate(state="CLOSED", reason="COMPLETED", prs=(), reopened=()):
+def fate(state="CLOSED", reason="COMPLETED", prs=(), reopened=(), closed=(), more=False):
+    def pr(n, m):
+        repo, num = n.rsplit("#", 1) if isinstance(n, str) else ("stranske/Workflows", n)
+        return {"number": int(num), "merged": m, "repository": {"nameWithOwner": repo}}
+
     return {
         "state": state,
         "stateReason": reason if state == "CLOSED" else None,
         "closedAt": "2026-11-20T00:00:00Z" if state == "CLOSED" else None,
-        "timelineItems": {"nodes": [{"createdAt": r} for r in reopened]},
-        "closedByPullRequestsReferences": {"nodes": [{"number": n, "merged": m} for n, m in prs]},
+        "timelineItems": {
+            "nodes": [{"__typename": "ReopenedEvent", "createdAt": r} for r in reopened]
+            + [{"__typename": "ClosedEvent", "createdAt": r} for r in closed]
+        },
+        "closedByPullRequestsReferences": {
+            "pageInfo": {"hasNextPage": more},
+            "nodes": [pr(n, m) for n, m in prs],
+        },
     }
 
 
@@ -610,3 +620,43 @@ def test_the_probe_prints_each_rule_including_a_drained_zero(brain):
     text = ro.format_probe(ro.probe())
     assert "rule closer followup: decisions 1, graded 1 (PASS 1, FAIL 0)" in text
     assert "rule opener done: decisions 0, graded 0 (PASS 0, FAIL 0)" in text
+
+
+def test_a_followup_is_not_graded_from_a_truncated_closing_pr_list(brain):
+    filed_followup(brain)
+    implemented("durable")
+    out = ro.label(now=NOW, _gh=github({FILED: fate(prs=[(51, True)], more=True)}))
+    assert out["closing_prs_truncated"] == 1 and outcome("offload:gemini:60") is None
+
+
+def test_a_closing_pr_in_another_repository_is_looked_up_there(brain):
+    filed_followup(brain)
+    implemented("reverted")  # stranske/Workflows#51: the same number, the wrong repository
+    run_id = "keepalive:stranske/Orchestrator#51:codex"
+    feedback.record_run(
+        run_id, "stranske/Orchestrator#51", "implement", "codex", pr_number=51, source="keepalive"
+    )
+    feedback.record_outcome(run_id, adjudicated_verdict="PASS", merged=1, durability="durable")
+    ro.label(now=NOW, _gh=github({FILED: fate(prs=[("stranske/Orchestrator#51", True)])}))
+    assert outcome("offload:gemini:60")[:2] == ("PASS", "durable")
+
+
+def test_one_unjudgeable_closing_merge_withholds_the_pass(brain):
+    filed_followup(brain)
+    implemented("durable")
+    implemented("unjudgeable", pr=52)
+    ro.label(now=NOW, _gh=github({FILED: fate(prs=[(51, True), (52, True)])}))
+    verdict, _d, fclass, _n = outcome("offload:gemini:60")
+    assert verdict is None and fclass == feedback.UNJUDGEABLE_MERGE
+
+
+def test_a_reopen_counts_from_the_judges_own_close(brain):
+    # the opener closed at 09:58; its round was written at 10:00
+    opener_done(when="2026-11-10T10:00:00Z")
+    record = fate(closed=["2026-11-10T09:58:00Z"], reopened=["2026-11-10T09:55:00Z"])
+    ro.label(now=NOW, _gh=github({SUBJECT: record}))
+    assert outcome("offload:codex:70")[:2] == ("PASS", "durable")  # reopened before that close
+    ro.restore()
+    record = fate(closed=["2026-11-10T09:58:00Z"], reopened=["2026-11-10T09:59:00Z"])
+    ro.label(now=NOW, _gh=github({SUBJECT: record}))
+    assert outcome("offload:codex:70")[:2] == ("FAIL", "reopened")  # between close and round

@@ -468,8 +468,10 @@ def acted_followups(c, state: Path | None = None) -> tuple[dict, Counter]:
 
 _ISSUE_FIELDS = (
     "state stateReason closedAt "
-    "timelineItems(itemTypes:[REOPENED_EVENT],last:20){nodes{... on ReopenedEvent{createdAt}}} "
-    "closedByPullRequestsReferences(first:10,includeClosedPrs:true){nodes{number merged}}"
+    "timelineItems(itemTypes:[REOPENED_EVENT,CLOSED_EVENT],last:50){nodes{__typename "
+    "... on ReopenedEvent{createdAt} ... on ClosedEvent{createdAt}}} "
+    "closedByPullRequestsReferences(first:25,includeClosedPrs:true){pageInfo{hasNextPage} "
+    "nodes{number merged repository{nameWithOwner}}}"
 )
 
 
@@ -518,10 +520,17 @@ def grade_done(issue: dict | None, judged_ts: int, now: int, grace: int):
     """(verdict, durability, why) for an acted opener `done`, or (None, state, why) to wait."""
     if not issue:
         return None, "gh_unanswered", ""
+    events = [
+        (n.get("__typename"), _gh_ts(n.get("createdAt")))
+        for n in issue["timelineItems"]["nodes"]
+        if n
+    ]
+    # The judge's close is the last close at or before the round that recorded it (the round's
+    # timestamp is written after the close); a reopen counts from that close on, never before it.
+    closes = [ts for kind, ts in events if kind == "ClosedEvent" and ts is not None]
+    anchor = max((ts for ts in closes if ts <= judged_ts), default=judged_ts)
     reopens = [
-        ts
-        for ts in (_gh_ts(n.get("createdAt")) for n in issue["timelineItems"]["nodes"] if n)
-        if ts is not None and ts >= judged_ts - 600
+        ts for kind, ts in events if kind == "ReopenedEvent" and ts is not None and ts >= anchor
     ]
     if reopens or issue.get("state") == "OPEN":
         when = time.strftime("%Y-%m-%d", time.gmtime(min(reopens))) if reopens else "since"
@@ -549,26 +558,30 @@ def grade_followup(c, filed: str, issue: dict | None):
     reason = str(issue.get("stateReason") or "")
     if reason in NOT_DONE_REASONS:
         return "FAIL", "abandoned", None, f"{filed} was closed {reason.lower()} on {closed}"
+    closing = issue["closedByPullRequestsReferences"]
+    if (closing.get("pageInfo") or {}).get("hasNextPage"):
+        return None, "closing_prs_truncated", None, ""  # never grade from part of the list
     repo = filed.rsplit("#", 1)[0]
     prs = sorted(
         {
-            int(n["number"])
-            for n in issue["closedByPullRequestsReferences"]["nodes"]
+            # a PR in another repository can close the issue: keep the PR's own repository
+            f"{(n.get('repository') or {}).get('nameWithOwner') or repo}#{int(n['number'])}"
+            for n in closing["nodes"]
             if n and n["merged"]
         }
     )
     if not prs:
         return None, "closed_without_merge", None, ""
-    verdicts = {pr: merge_verdict(c, filed, f"{repo}#{pr}") for pr in prs}
+    verdicts = {pr: merge_verdict(c, filed, pr) for pr in prs}
     states = {state for state, _d in verdicts.values()}
     for waiting in ("conflict", "pending", "no_merge_row"):
         if waiting in states:
             return None, waiting, None, ""
     finals = {d for state, d in verdicts.values() if state == "final"}
-    names = ", ".join(f"#{pr}" for pr in prs)
-    if finals == {"durable"}:
+    names = ", ".join(prs)
+    if states == {"final"} and finals == {"durable"}:
         return "PASS", "durable", None, f"{filed} was closed by merged {names}, judged durable"
-    if finals:
+    if finals - {"durable"}:
         # The filed work merged and did not hold: that grades the implementer, not the claim that
         # the remainder was real work. No grade.
         return None, "followup_merge_failed", None, ""
@@ -634,6 +647,7 @@ def label(
                 followup_rows.append((run_id, subject_id, filed[run_id][0]))
         if not done_rows and not followup_rows:
             return counts
+        c.commit()  # end the write transaction: the GitHub read must not hold the Brain's lock
         fates = issue_fates(
             [s for _r, s, _t in done_rows] + [f for _r, _s, f in followup_rows], _gh=_gh
         )
