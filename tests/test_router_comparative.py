@@ -551,8 +551,19 @@ def test_tilt_off_when_flag_off_or_route_disabled_or_no_assignment(tmp_path, mon
 
 
 def test_tilt_floor_rejects_non_positive_values(monkeypatch):
-    for raw in ("0", "-1", "abc"):
+    for raw in ("0", "-1", "abc", "inf", "1e309", "nan"):
         monkeypatch.setenv("ORCH_COMPARATIVE_TILT_FLOOR", raw)
         assert router._comparative_tilt_floor() == router.COMPARATIVE_TILT_FLOOR
     monkeypatch.setenv("ORCH_COMPARATIVE_TILT_FLOOR", "0.5")
     assert router._comparative_tilt_floor() == 0.5
+
+
+def test_comparative_shares_drop_non_finite_assignments(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    monkeypatch.delenv("ORCH_LOCAL_COMPARATIVE", raising=False)
+    _write_assignment_export(tmp_path, {"gemini": float("inf")})
+    router._COMPARATIVE_EXPORT_CACHE.clear()
+    assert router._comparative_shares("implement") is None
+    _write_assignment_export(tmp_path, {"gemini": float("inf"), "claude": 3.0, "codex": 1.0})
+    router._COMPARATIVE_EXPORT_CACHE.clear()
+    assert router._comparative_shares("implement") == {"claude": 0.75, "codex": 0.25}

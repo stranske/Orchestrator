@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import random
 import sys
@@ -434,7 +435,7 @@ def _comparative_tilt_floor() -> float:
     except ValueError:
         return COMPARATIVE_TILT_FLOOR
     # A zero or negative floor would remove every family the LP left unassigned from the draw.
-    return value if value > 0 else COMPARATIVE_TILT_FLOOR
+    return value if math.isfinite(value) and value > 0 else COMPARATIVE_TILT_FLOOR
 
 
 def _comparative_shares(task_type: str) -> dict[str, float] | None:
@@ -450,7 +451,10 @@ def _comparative_shares(task_type: str) -> dict[str, float] | None:
     runs = {
         agent: float(value)
         for agent, value in cells.items()
-        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
+        if isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value > 0
     }
     total = sum(runs.values())
     if total <= 0:
