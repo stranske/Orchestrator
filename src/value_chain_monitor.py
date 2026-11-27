@@ -123,6 +123,15 @@ INPUT_FLAGS = {
 STALL_SWEEP_LOG = "redirect-sweep.log"
 
 
+def _flag_is_off(flag: str, raw: Any) -> bool:
+    """Return True when an observed environment value disables `flag`; missing stays unknown."""
+    if raw is None:
+        return False
+    if flag == "ORCH_LOCAL_COMPARATIVE":
+        return str(raw).strip().lower() in {"0", "false", "no", "off"}
+    return str(raw).lower() in {"0", "false"}
+
+
 def _state_dir() -> Path:
     return Path(os.environ.get("ORCH_STATE_DIR", str(Path.home() / ".codex" / "orchestrator")))
 
@@ -1053,7 +1062,19 @@ def acted_on_index(db: Path, now: int, capability_ids) -> tuple[dict[str, int | 
             index[cid] = _comparative_tilt_counts(inputs.get("comparative_tilt_runs"))["acted_on"]
         else:
             index[cid] = int(outcome_counts(cid, own_edges_of(edges, cid))["acted_on"] or 0)
-    return index, f"value-chain monitor, {WINDOW_DAYS}d window, {db.name}"
+    reason = f"value-chain monitor, {WINDOW_DAYS}d window, {db.name}"
+    if COMPARATIVE_TILT_CAPABILITY in index and index[COMPARATIVE_TILT_CAPABILITY] is None:
+        tilt_error = next(
+            (
+                err
+                for err in inputs.get("errors", [])
+                if err.startswith("comparative-tilt runs unavailable")
+            ),
+            None,
+        )
+        if tilt_error:
+            reason = tilt_error
+    return index, reason
 
 
 def acted_on_window_index(
@@ -1094,7 +1115,19 @@ def acted_on_window_index(
         own = own_edges_of(edges, cid)
         bounded = [e for e in (own or []) if start <= int(e.get("created_ts") or 0) <= end]
         index[cid] = int(outcome_counts(cid, bounded)["acted_on"] or 0)
-    return index, "value-chain monitor, first-invocation deadline windows"
+    reason = "value-chain monitor, first-invocation deadline windows"
+    if COMPARATIVE_TILT_CAPABILITY in index and index[COMPARATIVE_TILT_CAPABILITY] is None:
+        tilt_error = next(
+            (
+                err
+                for err in inputs.get("errors", [])
+                if err.startswith("comparative-tilt runs unavailable")
+            ),
+            None,
+        )
+        if tilt_error:
+            reason = tilt_error
+    return index, reason
 
 
 def supervisor_closure_acceptance(
@@ -1583,11 +1616,7 @@ def report(
             return flags
 
         dependencies.update(default_off_flags(cap.get("flags_defaults", {})))
-        off = [
-            flag
-            for flag in sorted(dependencies)
-            if str(env.get(flag, "unknown")).lower() in {"0", "false"}
-        ]
+        off = [flag for flag in sorted(dependencies) if _flag_is_off(flag, env.get(flag))]
         counts["input_off"] = ["input_off:" + flag for flag in off]
         counts["first_break"] = first_break(counts)
         rows.append(counts)
