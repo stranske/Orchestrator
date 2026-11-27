@@ -205,9 +205,11 @@ def _round_items(state: Path, counts: Counter):
         rounds.append(
             (
                 ts,
-                [i for i in items if isinstance(i, dict) and isinstance(i.get("judge"), dict)]
-                if isinstance(items, list)
-                else [],
+                (
+                    [i for i in items if isinstance(i, dict) and isinstance(i.get("judge"), dict)]
+                    if isinstance(items, list)
+                    else []
+                ),
             )
         )
     rounds.sort(key=lambda r: r[0])
@@ -240,7 +242,9 @@ def _opener_pr(state: Path, target: str) -> int | None:
     if not isinstance(row, dict) or str(row.get("target", "")).lower() != target.lower():
         return None
     pr = row.get("pr") or row.get("invite_pr")
-    return int(pr) if isinstance(pr, int) or str(pr).isdigit() else None
+    if isinstance(pr, int):
+        return pr
+    return int(pr) if isinstance(pr, str) and pr.isdigit() else None
 
 
 def ingest_rounds(producer: str, state: Path | None = None, *, now: int | None = None) -> Counter:
