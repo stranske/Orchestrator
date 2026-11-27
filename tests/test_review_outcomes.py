@@ -33,6 +33,9 @@ def brain(monkeypatch, tmp_path):
     state = tmp_path / "closer-core"
     (state / "targets").mkdir(parents=True)
     monkeypatch.setenv("CLOSER_CORE_STATE", str(state))
+    opener = tmp_path / "opener-core"
+    (opener / "targets").mkdir(parents=True)
+    monkeypatch.setenv("OPENER_CORE_STATE", str(opener))
     return state
 
 
@@ -236,7 +239,171 @@ def test_probe_counts_the_chain_and_the_post_deploy_pass_number(brain):
 
 def test_a_drained_rail_prints_zeroes_not_silence(brain):
     out = ro.run()
-    assert out == {"ingest": {}, "label": {}}
+    # no round record at all is reported, never read as "nothing judged"
+    assert out == {
+        "ingest": {},
+        "rounds": {"rounds_missing": 1},
+        "opener_rounds": {"rounds_missing": 1},
+        "label": {},
+    }
     text = ro.format_probe(ro.probe())
     assert "graded 0 (PASS 0, FAIL 0)" in text
     assert "post-deploy outcomes 0 / 100" in text
+
+
+# --- round records (second unit): both lanes' rounds.jsonl, history included -----------------
+
+
+def rounds(state, *entries):
+    """Append rounds: each entry is (iso ts, [items])."""
+    with (state / "rounds.jsonl").open("a") as fh:
+        for ts, items in entries:
+            fh.write(json.dumps({"ts": ts, "items": items}) + "\n")
+
+
+def closer_item(decision, *, run_id=None, provider="gemini", target=SUBJECT, pr=PR):
+    judge = {"decision": decision, "provider": provider, "strong": False}
+    if run_id:
+        judge["run_id"] = run_id
+    return {"target": target, "pr": pr, "action": "judge", "judge": judge}
+
+
+def ts_of(iso):
+    import calendar
+    import time
+
+    return calendar.timegm(time.strptime(iso, "%Y-%m-%dT%H:%M:%SZ"))
+
+
+def test_a_round_judgement_with_its_run_id_is_recorded_and_graded(brain):
+    judge_run("offload:gemini:30")
+    rounds(brain, ("2026-11-27T10:00:00Z", [closer_item("close", run_id="offload:gemini:30")]))
+    merge("durable")
+    out = ro.run()
+    assert out["rounds"] == {"recorded": 1}
+    assert outcome("offload:gemini:30")[:2] == ("PASS", "durable")
+    assert ro.run()["rounds"] == {"known": 1}  # every tick re-reads the file; first record kept
+
+
+def test_an_old_round_without_a_run_id_joins_the_one_run_inside_it(brain):
+    t0, t1 = ts_of("2026-11-20T10:00:00Z"), ts_of("2026-11-20T10:15:00Z")
+    judge_run("offload:gemini:31", ts=t0 - 60)  # before the previous round ended: not this one
+    judge_run("offload:gemini:32", ts=t0 + 300)
+    judge_run("offload:codex:33", agent="codex", ts=t0 + 400)  # another agent
+    rounds(
+        brain,
+        ("2026-11-20T10:00:00Z", []),
+        ("2026-11-20T10:15:00Z", [closer_item("close")]),
+    )
+    merge("durable")
+    assert ro.run()["rounds"] == {"recorded": 1}
+    assert outcome("offload:gemini:32")[:2] == ("PASS", "durable")
+    assert outcome("offload:gemini:31") is None
+    assert t1 > t0
+
+
+def test_two_same_agent_runs_in_one_round_are_ambiguous_not_guessed(brain):
+    t0 = ts_of("2026-11-20T10:00:00Z")
+    judge_run("offload:gemini:34", ts=t0 + 100)
+    judge_run("offload:gemini:35", ts=t0 + 200)
+    rounds(
+        brain,
+        ("2026-11-20T10:00:00Z", []),
+        ("2026-11-20T10:15:00Z", [closer_item("close")]),
+        ("2026-11-20T11:00:00Z", [closer_item("close", target="stranske/Workflows#77")]),
+    )
+    assert ro.ingest_rounds(ro.PRODUCER) == {"ambiguous": 1, "no_run": 1}
+
+
+def test_a_round_run_id_for_another_issue_is_refused(brain):
+    judge_run("offload:gemini:36", subject="stranske/Workflows#99")
+    rounds(brain, ("2026-11-27T10:00:00Z", [closer_item("close", run_id="offload:gemini:36")]))
+    assert ro.ingest_rounds(ro.PRODUCER) == {"subject_mismatch": 1}
+
+
+def opener_run(run_id, agent="codex", subject=SUBJECT, ts=None):
+    feedback.record_run(
+        run_id,
+        "offload:" + str(ro.opener_state() / "scratch"),
+        "review",
+        agent,
+        mode="offload",
+        routing_metadata={"subject_id": subject, "subject_source": "caller"},
+    )
+    if ts is not None:
+        with feedback._conn() as c:
+            c.execute("UPDATE runs SET ts=? WHERE run_id=?", (ts, run_id))
+
+
+def opener_row(target=SUBJECT, **fields):
+    import re
+
+    path = ro.opener_state() / "targets" / (re.sub(r"[^a-z0-9]+", "_", target.lower()) + ".json")
+    path.write_text(json.dumps({"target": target, "state": "pr_linked", **fields}))
+
+
+def opener_item(decision, action, run_id, target=SUBJECT):
+    return {
+        "target": target,
+        "action": action,
+        "judge": {"decision": decision, "provider": "codex", "run_id": run_id},
+    }
+
+
+def test_an_acted_opener_start_is_graded_by_the_merge_of_the_pr_it_led_to(brain):
+    opener_run("offload:codex:40")
+    rounds(
+        ro.opener_state(),
+        ("2026-11-27T10:00:00Z", [opener_item("start", "start", "offload:codex:40")]),
+    )
+    assert ro.run()["opener_rounds"] == {"no_pr_yet": 1}  # waits for the opener to link a PR
+    opener_row(pr=PR)
+    merge("broke_later")
+    out = ro.run()
+    assert out["opener_rounds"] == {"recorded": 1}
+    verdict, durability, _, notes = outcome("offload:codex:40")
+    assert (verdict, durability) == ("FAIL", "broke_later")
+    assert notes.startswith(ro.OPENER_NOTE_PREFIX)
+    assert ro.restore() == 1
+
+
+def test_an_opener_judgement_the_round_did_not_act_on_is_skipped(brain):
+    opener_run("offload:codex:41")
+    opener_row(pr=PR)
+    rounds(
+        ro.opener_state(),
+        ("2026-11-27T10:00:00Z", [opener_item("start", "format-unfixed", "offload:codex:41")]),
+    )
+    assert ro.ingest_rounds(ro.OPENER) == {"not_acted": 1}
+
+
+def test_an_opener_park_is_recorded_but_has_no_rule(brain):
+    opener_run("offload:codex:42")
+    rounds(
+        ro.opener_state(),
+        ("2026-11-27T10:00:00Z", [opener_item("park", "park", "offload:codex:42")]),
+    )
+    merge("durable")
+    out = ro.run()
+    assert out["opener_rounds"] == {"recorded": 1}
+    assert out["label"] == {"awaiting_rule:park": 1}
+    assert outcome("offload:codex:42") is None
+
+
+def test_probe_counts_the_opener_chain_apart_from_the_pass_number(brain):
+    opener_run("offload:codex:43", ts=300)
+    opener_row(pr=PR)
+    rounds(
+        ro.opener_state(),
+        ("2026-11-27T10:00:00Z", [opener_item("start", "start", "offload:codex:43")]),
+    )
+    merge("durable")
+    ro.run()
+    res = ro.probe(since=200)
+    assert res["opener"]["totals"]["outcome"] == 1
+    assert res["opener"]["families"]["codex"]["pass"] == 1
+    assert res["pass_number"]["value"] == 0  # the pass number is the closer judge's
+    assert (
+        "review outcomes (opener judge): judge runs 1; decision recorded 1; start 1; graded 1"
+        in (ro.format_probe(res))
+    )
