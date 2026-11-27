@@ -452,7 +452,7 @@ def default_rotate(task_type: str, tried: set[str]) -> str | None:
     )
     agent = pick["agent"] if pick and pick.get("agent") not in tried else None
     # The rotated-to round is a router decision; LocalLoop hands this to the launch so the run keeps it.
-    default_rotate.last_decision = router.route_decision_record(pick) if agent else None
+    setattr(default_rotate, "last_decision", router.route_decision_record(pick) if agent else None)
     return agent
 
 

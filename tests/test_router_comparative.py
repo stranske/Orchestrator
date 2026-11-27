@@ -618,4 +618,6 @@ def test_route_decision_record_keeps_choice_source_and_tilt(tmp_path, monkeypatc
     assert record["comparative_tilt"]["shares"] == {"gemini": 1.0}
     json.dumps(record)  # it travels on a command line and into routing_metadata
     assert router.route_decision_record(None) is None
-    assert router.route_decision_record({"agent": "codex"}) is None  # nothing drawn, nothing to grade
+    assert (
+        router.route_decision_record({"agent": "codex"}) is None
+    )  # nothing drawn, nothing to grade

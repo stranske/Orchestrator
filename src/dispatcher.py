@@ -6505,12 +6505,15 @@ def main(argv: list[str]) -> int:
         prompt = ns.prompt if ns.prompt is not None else Path(ns.prompt_file).read_text()
         review_kwargs: dict[str, Any] = {"review_loop": True} if ns.review_loop else {}
         route_decision = None
+        route_kwargs: dict[str, Any] = {}
         if ns.route_decision:
             try:
                 route_decision = json.loads(ns.route_decision)
             except ValueError as exc:
                 # A bad attribution must never stop a start; the run is then recorded as a plain pin.
                 print(f"delegate: --route-decision ignored ({exc})", file=sys.stderr)
+        if isinstance(route_decision, dict):
+            route_kwargs["route_decision"] = route_decision
         out = delegate(
             ns.agent,
             ns.target,
@@ -6523,7 +6526,7 @@ def main(argv: list[str]) -> int:
             influenced_by_role_run_ids=ns.influenced_by_role_run_id,
             **review_kwargs,
             **({"rationale": ns.rationale} if ns.rationale else {}),
-            **({"route_decision": route_decision} if isinstance(route_decision, dict) else {}),
+            **route_kwargs,
             **({"branch_prefix": ns.branch_prefix} if ns.branch_prefix is not None else {}),
         )
         print(json.dumps(out, default=str))
