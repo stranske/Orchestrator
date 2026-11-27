@@ -749,7 +749,7 @@ def test_routing_metadata_keeps_a_caller_pin_route_decision():
     ],
 )
 def test_main_delegate_passes_route_decision_and_ignores_bad_json(
-    tmp_path, monkeypatch, flag, expected
+    tmp_path, monkeypatch, capsys, flag, expected
 ):
     """`--route-decision` reaches delegate; unparseable JSON never stops the start (P3, 2026-11-27)."""
     seen = {}
@@ -761,3 +761,5 @@ def test_main_delegate_passes_route_decision_and_ignores_bad_json(
     argv += ["--prompt-file", str(prompt), "--route-decision", flag]
     assert dispatcher.main(argv) == 0
     assert seen.get("route_decision") == expected
+    warned = "delegate: --route-decision ignored" in capsys.readouterr().err
+    assert warned is (expected is None)
