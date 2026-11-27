@@ -142,3 +142,44 @@ def test_mechanical_work_offers_muse_on_rung_one():
         e for e in router._ROUTE_TABLE_TYPED["mechanical"]["agents"] if e["agent"] == "muse"
     )
     assert entry["late"] is True  # late unless the ladder lifts it
+
+
+def test_regression_outcomes_count_against_muse(tmp_path):
+    """Five durable and five reverted is 50%, not 100%: reverted/reworked/reopened are resolved failures."""
+    runs = [(1, "durable")] * 5 + [(1, "reverted"), (1, "reworked"), (1, "reopened")] * 2
+    stand = muse_ladder.standing(_brain(tmp_path / "r.db", runs), 1_000_100, fresh=True)
+    assert stand["rungs"][1]["resolved"] == 11 and stand["level"] == 1
+    # `abandoned` is a lane decision (duplicates, supersession), not Muse's failure: not counted.
+    abandoned = [(1, "durable")] * 5 + [(1, "abandoned")] * 3
+    assert (
+        muse_ladder.standing(_brain(tmp_path / "a.db", abandoned), 1_000_100, fresh=True)["level"]
+        == 2
+    )
+
+
+def test_cached_standing_holds_until_expiry_and_fresh_bypasses_it(tmp_path, monkeypatch):
+    clock = {"t": 5_000.0}
+    monkeypatch.setattr(muse_ladder.time, "time", lambda: clock["t"])
+    muse_ladder._CACHE.clear()
+    db = _brain(tmp_path / "c.db", [(1, "durable")] * 5)
+    assert muse_ladder.standing(db, now=1_000_100, fresh=True)["level"] == 2
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE outcomes SET durability='broke_later' WHERE run_id IN ('m0','m1')")
+    clock["t"] += muse_ladder.CACHE_SECONDS - 1
+    assert muse_ladder.standing(db, now=1_000_100)["level"] == 2  # cached, before expiry
+    clock["t"] += 2
+    assert muse_ladder.standing(db, now=1_000_100)["level"] == 1  # re-read after expiry
+    # fresh=True never serves the cache: cache level 2 again on a second Brain, then change it.
+    db2 = _brain(tmp_path / "d.db", [(1, "durable")] * 5)
+    assert muse_ladder.standing(db2, now=1_000_100)["level"] == 2
+    with sqlite3.connect(db2) as conn:
+        conn.execute("UPDATE outcomes SET durability='reverted' WHERE run_id IN ('m0','m1')")
+    assert muse_ladder.standing(db2, now=1_000_100)["level"] == 2  # still cached
+    assert muse_ladder.standing(db2, now=1_000_100, fresh=True)["level"] == 1
+
+
+def test_a_relative_brain_path_is_read_not_raised(tmp_path, monkeypatch):
+    _brain(tmp_path / "rel.db", [(1, "durable")] * 5)
+    monkeypatch.chdir(tmp_path)
+    stand = muse_ladder.standing(__import__("pathlib").Path("rel.db"), 1_000_100, fresh=True)
+    assert stand["state"] == "measured" and stand["level"] == 2

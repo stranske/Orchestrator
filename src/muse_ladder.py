@@ -45,6 +45,9 @@ PROMOTE_MIN_DURABLE = 0.80
 WINDOW_DAYS = 90
 TOP_RUNG = 3
 IMPLEMENT_KINDS = frozenset({"implement", "implementation", "coding"})
+# Judged, terminal outcomes: durable counts for Muse; broke_later and the Brain's regression values
+# (feedback.CAPABILITY_REGRESSION_DURABILITY: reverted, reworked, reopened) count against it.
+RESOLVED_FAILURES = frozenset({"broke_later", "reverted", "reworked", "reopened"})
 CACHE_SECONDS = 300
 _CACHE: dict[str, tuple[float, dict]] = {}
 
@@ -71,7 +74,9 @@ def _db_path() -> Path:
 
 def standing(db_path: Path | None = None, now: int | None = None, *, fresh: bool = False) -> dict:
     """{level, rungs: {r: {resolved, durable, rate}}, state: measured|unmeasured, reason}."""
-    path = Path(db_path) if db_path is not None else _db_path()
+    # Absolute before the cache key and the URI: ORCH_FEEDBACK_DB may be relative, and
+    # Path.as_uri() raises ValueError on a relative path (outside the sqlite3.Error fallback).
+    path = (Path(db_path) if db_path is not None else _db_path()).expanduser().resolve()
     now = int(time.time()) if now is None else now
     key = str(path)
     if not fresh and key in _CACHE and time.time() - _CACHE[key][0] < CACHE_SECONDS:
@@ -102,7 +107,7 @@ def standing(db_path: Path | None = None, now: int | None = None, *, fresh: bool
             r = int(rung)
         except (TypeError, ValueError):
             continue
-        if r in rungs and durability in ("durable", "broke_later"):
+        if r in rungs and (durability == "durable" or durability in RESOLVED_FAILURES):
             rungs[r]["resolved"] += 1
             rungs[r]["durable"] += durability == "durable"
     for row in rungs.values():
