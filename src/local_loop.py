@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import inspect
 import json
 import os
 import re
@@ -441,7 +442,7 @@ def default_capacity() -> dict:
     return router.local_capacity()
 
 
-def default_rotate(task_type: str, tried: set[str]) -> str | None:
+def default_rotate(task_type: str, tried: set[str], *, simulate: bool = False) -> str | None:
     _, router = _rails()
     known = {e["agent"] for spec in router._ROUTE_TABLE_TYPED.values() for e in spec["agents"]}
     pick = router.select_agent(
@@ -449,6 +450,7 @@ def default_rotate(task_type: str, tried: set[str]) -> str | None:
         router.load_capacity(),
         learned=(router.learned_ranks() or {}).get(task_type),
         only=(known - tried) or {"__none__"},
+        simulate=simulate,
     )
     agent = pick["agent"] if pick and pick.get("agent") not in tried else None
     # The rotated-to round is a router decision; LocalLoop hands this to the launch so the run keeps it.
@@ -564,7 +566,7 @@ class Tick:
         now: Callable[[], float] = time.time,
         running: Callable[[list[str]], bool] = default_running,
         capacity: Callable[[], dict] = default_capacity,
-        rotate: Callable[[str, set[str]], str | None] = default_rotate,
+        rotate: Callable[..., str | None] = default_rotate,
         hosted_agent: Callable[[str, str], str | None] = default_hosted_agent,
         acceptance: Callable[[str, str | None, str, str], dict] = default_acceptance,
         launch: Callable[[str, str, str, str], dict] = default_launch,
@@ -797,6 +799,14 @@ class Tick:
         st["failures"] = {"head": ci["head"], "items": items}
         return items
 
+    def _rotate_agent(self, task_type: str, tried: set[str]) -> str | None:
+        params = inspect.signature(self.rotate).parameters
+        if "simulate" in params or any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+        ):
+            return self.rotate(task_type, tried, simulate=not self.apply)
+        return self.rotate(task_type, tried)
+
     def next_round(
         self,
         st: dict,
@@ -813,7 +823,7 @@ class Tick:
             return self.handoff(st, pr, repo, labels, f"round cap {ROUND_CAP} reached")
         if int(st.get("unproductive", 0)) >= STALL_ROUNDS:
             tried = set(st["tried"])
-            nxt = self.rotate("implement", tried) if len(tried) < MAX_AGENTS else None
+            nxt = self._rotate_agent("implement", tried) if len(tried) < MAX_AGENTS else None
             if not nxt:
                 return self.handoff(
                     st,

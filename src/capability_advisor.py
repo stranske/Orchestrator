@@ -1229,6 +1229,10 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
         "claude is separated under reserve, and an unchanged semantic document is not rewritten; "
         "break case: removing the threshold filter admits the fixture's 12-observation cursor "
         "row. Never passes --publish or ORCH_ROUTE_WEIGHTS_PUBLISH=1",
+        "comparative-tilt": "EXERCISE the comparative tilt's read-only value-chain accounting over "
+        "fixture Brain runs: demand counts local implement runs with route_decision, invocation "
+        "counts those carrying comparative_tilt, usable requires positive base and tilted tier "
+        "sums, and an unread Brain stays unmeasured. Never toggles ORCH_LOCAL_COMPARATIVE",
         "thompson-hybrid-routing": "EXERCISE the exploration policy on fixture route weights with a "
         "seeded sampler: the sampled arm distribution over N draws tracks the posterior within a "
         "pre-committed tolerance and a collapsed posterior always picks its mode; break case: a "
