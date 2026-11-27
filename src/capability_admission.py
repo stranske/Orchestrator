@@ -653,7 +653,15 @@ def consumer_class(cap: dict, ctx: dict) -> tuple[str, bool, str]:
             True,
             f"consumer {consumer} resolves; acting unmeasured here ({reason})",
         )
-    acted = int(index[cap["capability_id"]] or 0)
+    count = index[cap["capability_id"]]
+    if count is None:
+        reason = ctx.get("acted_on_reason") or "no Brain on this machine"
+        return (
+            "unmeasured",
+            True,
+            f"consumer {consumer} resolves; acting unmeasured here ({reason})",
+        )
+    acted = int(count)
     if acted > 0:
         # CAPABILITY-LEVEL. An influence edge records the run that consumed this capability's
         # output, never the rail that did it (the target event's `producer` is the Brain writer:
