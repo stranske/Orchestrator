@@ -30,6 +30,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+import ci_tested_merge
 import exact_head_merge_gate
 import feedback
 import outcomes
@@ -571,6 +572,9 @@ def guarded_merge(
     adjudicate_fn=None,
     spawn_fn=None,
     review_loop_fn=None,
+    require_fresh_base: bool = False,
+    freshness_fn=None,
+    update_branch_fn=None,
 ) -> dict[str, Any]:
     if admission_only and (confirm_merge or not remote_only):
         raise ValueError("admission-only guard requires non-mutating remote-only invocation")
@@ -622,6 +626,31 @@ def guarded_merge(
     }
     if gate_result["blocked"]:
         return result
+    if require_fresh_base:
+        # Owner 2026-11-27: a merge goes to main only on the main its PR CI tested, give or take
+        # template-sync/floor commits that touch none of its files (ci_tested_merge's contract). Stale:
+        # merge main into the branch here (the drain runs while this gate is closed) and stop; the
+        # new head gets its own PR run, and the caller re-runs this with that head.
+        repo, num = provision.parse_target(target)
+        fresh = (freshness_fn or ci_tested_merge.freshness)(
+            repo, int(num or 0), expected_head or ""
+        )
+        result["base_freshness"] = fresh
+        if fresh.get("state") == "stale":
+            result["blocked"] = True
+            result["reason"] = fresh.get("line") or "base stale since CI"
+            if confirm_merge:
+                update = (update_branch_fn or ci_tested_merge.update_branch)(
+                    repo, int(num or 0), str(expected_head)
+                )
+                result["branch_update"] = update
+                result["reason"] += (
+                    "; merged the base into the branch: when CI is green on the new head, re-run with "
+                    "its --expected-head"
+                    if update.get("ok")
+                    else f"; update-branch failed ({update.get('detail')}): merge the base in by hand"
+                )
+            return result
     import review_loop
 
     def review_checkpoint():
@@ -1203,6 +1232,11 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--json", action="store_true", help="accepted for consistency; output is always JSON"
     )
+    parser.add_argument(
+        "--allow-stale-base",
+        action="store_true",
+        help="merge even if the base moved (beyond exempt commits) since the PR's CI tested this head",
+    )
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args(argv)
 
@@ -1220,7 +1254,11 @@ def main(argv: list[str]) -> int:
         skip_immediate_advisory=args.skip_immediate_advisory,
         remote_only=args.remote_only,
         require_runtime_ac=args.require_runtime_ac,
+        require_fresh_base=not args.allow_stale_base,
     )
+    freshness_line = (result.get("base_freshness") or {}).get("line")
+    if freshness_line:
+        print(freshness_line, file=sys.stderr)
     print(json.dumps(result, indent=2, default=str))
     return 0 if not result.get("blocked") else 1
 

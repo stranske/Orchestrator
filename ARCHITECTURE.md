@@ -531,6 +531,22 @@ protects sibling checkouts, live home state and Git metadata. Dirty or untracked
 refused, restoration is verified before retry, and failed source closure is retried independently
 of the already-filed follow-up. Selection stays a rail; only the reviewer's judgment is a role.
 
+**The merge goes to the main its CI tested (owner, 2026-11-27).** On `pull_request`, ci.yml checks out
+GitHub's test merge, the PR head merged into main as main stood when the run started, so a green PR run
+already tested the change with main, but only with that main. `ci_tested_merge.tested_merge` reads which
+merge the newest green PR run checked out (the `+<sha>:refs/remotes/pull/N/merge` fetch in its job log).
+`merge_guard`'s command line (not closer-core's in-process call) then compares main with that tested base:
+`fresh` (behind 0) and `exempt_drift` (only workflow-template syncs and collection-floor reconciles that
+touch none of the PR's files) merge; `stale` blocks, merges main into the branch itself (GitHub
+update-branch, a merge, never a rebase), and asks for a re-run on the new head once its CI is green;
+`unmeasured` never blocks and says why. The line prints the blocking and drainable counts together
+(`behind 2 since CI tested this head (non-exempt 1, drainable 1 ...)`); `--allow-stale-base` opts out.
+Measured on #1508: its last PR run tested its head on c29e953e, main gained one template sync (disjoint)
+before the merge, and the merged tree differed from the tested one by exactly that commit's files.
+The same reading lets `orch-mirror-sync.sh` deploy a main commit on the PR run that tested its exact
+tree (`ci_tested_merge.py deploy-reuse`), or on that run when the commit is only a `.verify-floor.json`
+reconcile on top of such a commit, instead of waiting for main's own run (c29e953e/#1509 qualified).
+
 The adapter also decides each codex run's writable boundary. A run whose job is to commit (a
 dispatch from `plan_dispatch`, or an experiment arm) gets `--add-dir` for exactly its linked
 worktree's git dir, plus the canonical clone's `objects/`, `refs/` and `logs/`
