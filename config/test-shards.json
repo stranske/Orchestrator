@@ -43,6 +43,7 @@
     "tests/test_profile_trial_run.py",
     "tests/test_python_floor.py",
     "tests/test_reconcile_floor_dispatches_ci.py",
+    "tests/test_review_outcomes.py",
     "tests/test_router_choose_mode.py",
     "tests/test_ccusage_reconcile.py",
     "tests/test_exploration_collection.py",
@@ -528,7 +529,8 @@
       "tests/test_strategy_experiment.py",
       "tests/test_model_table.py",
       "tests/test_model_table_local.py",
-      "tests/test_gemini_pacing_source.py"
+      "tests/test_gemini_pacing_source.py",
+      "tests/test_review_outcomes.py"
     ]
   ]
 }
