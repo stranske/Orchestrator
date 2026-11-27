@@ -1995,7 +1995,7 @@ appends source-labelled observations and snapshots even while shed. Codex weekly
 Claude uses desktop weekly history. Unknown/stale pacing preserves native routability; shared
 ccusage totals never become per-agent percentages. Both burn-rate aliases are retained.
 `router.select_agent` preserves load/late/state/policy/drain tiers and samples tied pools by
-posterior × pacing weight within Codex/Claude only (legacy exploration runs first), then falls
+posterior × pacing weight (× the comparative tilt when the LP's assignment is live) within Codex/Claude only (legacy exploration runs first), then falls
 back to zero-weight warn pools, then pacing-shed pools with
 `fail-toward-motion`; auth/model/manual holds retain authority. The plan and persisted dispatch
 metadata carry all candidate weights and projections. `capacity.py pick-agent` exposes that same
@@ -2153,6 +2153,26 @@ change, so comparing them measured fleet quota trouble that routing could not cl
 export reuses the last `optimal` result saved in `$ORCH_STATE_DIR/comparative-last-optimal.json`
 for up to 24 h (`held_from`, `held_age_seconds`, `held_because`); past that, or for any other
 status, the flag is false with the reason. Only the live export reads or writes that file.
+**The LP's assignment tilts the measured-pacing draw (owner, 2026-11-27, campaign P3).** The rank
+above is a tiebreak inside `scored`, and the measured-pacing draw (`_pacing_choice`, taken whenever
+Codex or Claude pacing is measured, which is nearly always) never reads it: before this change the
+comparative rank decided 0 of 48 opener starts after go-live, while the LP sent implement work to
+Gemini and Codex, the scarcest pool, took 45% of it. Now, when `route_enabled` is true and the export
+carries `comparative.assignment[task_type]`, each candidate's draw weight is multiplied by
+`floor + share`, where share is the agent's fraction of the LP's assigned runs for that class and the
+floor is `COMPARATIVE_TILT_FLOOR` (0.25, `ORCH_COMPARATIVE_TILT_FLOOR`, never zero). The floor is the
+owner's choice over following the LP directly: the LP is linear and gives all-or-nothing splits, and
+families it cannot measure yet stay in the draw. Those are Cursor (measured 2026-11-27: its CLI
+results carry `usage: {}`, so 0 of 1,022 runs are priced), Vibe (flat plan, no pacing source), and
+Muse and agy (fewer than 20 judged runs on any class). The tilt is recorded in
+`pacing_decision.comparative_tilt` (floor and shares); `route_source` keeps its meaning.
+Fail-toward-motion is untouched, and `ORCH_LOCAL_COMPARATIVE=0` turns the tilt off with the rank.
+Pass number (two criteria, no dates): of the next 50 local implement starts after the deploy, at
+least 40% go to the families the LP assigns implement to (baseline: 13.6% of 772 local implement
+starts since 2026-11-10 went to Gemini, the LP's pick); and once 30 of those starts have a resolved
+durability, durable / (durable + broke_later) is at least 95%. The floor makes the LP's own split
+unreachable by design (one assigned family among five draws about 55%), so the measure is the shift
+toward the assigned families, not distance from the LP.
 The live pass number requires at least one differing class with measured Codex and Claude prices
 over the 14-day pacing-history window, checked no earlier than 2026-11-07 and 14 days after
 the first #668 state. Fixture success does not meet that live pass number or enable consumption.

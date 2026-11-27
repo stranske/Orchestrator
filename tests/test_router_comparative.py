@@ -472,3 +472,98 @@ def test_export_load_diagnostic_once_per_path(tmp_path, monkeypatch, capsys, fai
     else:
         assert diagnostic.count("cannot load comparative export") == 1
         assert str(target) in diagnostic
+
+
+def _write_assignment_export(state_dir: Path, assignment: dict, *, route_enabled=True) -> None:
+    state_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema": "orchestrator.route-weights/v1",
+        "comparative": {"route_enabled": route_enabled, "assignment": {"implement": assignment}},
+        "task_types": {"implement": {"evidence_ok": True, "ranking": []}},
+        "reserve": {},
+    }
+    (state_dir / "route-weights-export.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _paced_tier_counts(n: int = 2000) -> dict[str, int]:
+    """Draw n picks from one measured-pacing tier of four families with equal posteriors."""
+    cap = {
+        "agents": {
+            "codex": {"state": "ok", "pacing": {"state": "ok", "routing_weight": 1.0}},
+            "claude": {"state": "ok", "pacing": {"state": "ok", "routing_weight": 1.0}},
+            "gemini": {"state": "ok"},
+            "cursor": {"state": "ok"},
+        }
+    }
+    learned = {a: {"posterior": 0.5, "score": 0.5, "rank": 0} for a in cap["agents"]}
+    rng = random.Random(7)
+    counts: dict[str, int] = {}
+    last = None
+    for _ in range(n):
+        router._COMPARATIVE_EXPORT_CACHE.clear()
+        last = router.select_agent(
+            "implement",
+            cap,
+            only=set(cap["agents"]),
+            learned=learned,
+            exploration_rate=0.0,
+            rng=rng,
+            simulate=True,
+        )
+        assert last is not None
+        counts[last["agent"]] = counts.get(last["agent"], 0) + 1
+    counts["_decision"] = last.get("pacing_decision")  # type: ignore[assignment]
+    return counts
+
+
+def test_lp_assignment_tilts_the_paced_draw_with_a_floor(tmp_path, monkeypatch):
+    """P3 (owner 2026-11-27): the LP's split tilts the pacing draw; unassigned families keep the floor."""
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    monkeypatch.delenv("ORCH_LOCAL_COMPARATIVE", raising=False)
+    monkeypatch.delenv("ORCH_COMPARATIVE_TILT_FLOOR", raising=False)
+    _write_assignment_export(tmp_path, {"gemini": 223.5})
+    counts = _paced_tier_counts()
+    decision = counts.pop("_decision")
+    assert decision["comparative_tilt"] == {"floor": 0.25, "shares": {"gemini": 1.0}}
+    # Expected shares: gemini 1.25 / (1.25 + 3 x 0.25) = 62.5%; each other family 12.5%.
+    total = sum(counts.values())
+    assert 0.57 < counts["gemini"] / total < 0.68
+    for agent in ("codex", "claude", "cursor"):  # cursor is outside the LP: floor, never zero
+        assert 0.09 < counts.get(agent, 0) / total < 0.16
+
+
+def test_tilt_off_when_flag_off_or_route_disabled_or_no_assignment(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    for setup in ("flag_off", "route_disabled", "no_assignment"):
+        monkeypatch.delenv("ORCH_LOCAL_COMPARATIVE", raising=False)
+        if setup == "flag_off":
+            _write_assignment_export(tmp_path, {"gemini": 223.5})
+            monkeypatch.setenv("ORCH_LOCAL_COMPARATIVE", "0")
+        elif setup == "route_disabled":
+            _write_assignment_export(tmp_path, {"gemini": 223.5}, route_enabled=False)
+        else:
+            _write_assignment_export(tmp_path, {})
+        counts = _paced_tier_counts(1200)
+        decision = counts.pop("_decision")
+        assert "comparative_tilt" not in decision, setup
+        total = sum(counts.values())
+        assert all(0.19 < c / total < 0.31 for c in counts.values()), (setup, counts)
+
+
+def test_tilt_floor_rejects_non_positive_values(monkeypatch):
+    for raw in ("0", "-1", "abc", "inf", "1e309", "nan"):
+        monkeypatch.setenv("ORCH_COMPARATIVE_TILT_FLOOR", raw)
+        assert router._comparative_tilt_floor() == router.COMPARATIVE_TILT_FLOOR
+    monkeypatch.setenv("ORCH_COMPARATIVE_TILT_FLOOR", "0.5")
+    assert router._comparative_tilt_floor() == 0.5
+
+
+def test_comparative_shares_drop_non_finite_assignments(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    monkeypatch.delenv("ORCH_LOCAL_COMPARATIVE", raising=False)
+    _write_assignment_export(tmp_path, {"gemini": float("inf")})
+    router._COMPARATIVE_EXPORT_CACHE.clear()
+    assert router._comparative_shares("implement") is None
+    _write_assignment_export(tmp_path, {"gemini": float("inf"), "claude": 3.0, "codex": 1.0})
+    router._COMPARATIVE_EXPORT_CACHE.clear()
+    assert router._comparative_shares("implement") == {"claude": 0.75, "codex": 0.25}

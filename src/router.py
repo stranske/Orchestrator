@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import random
 import sys
@@ -405,7 +406,7 @@ def _comparative_export_path() -> Path:
     return state_dir / ROUTE_WEIGHTS_EXPORT_NAME
 
 
-def _comparative_rank(task_type: str, agent: str) -> int | None:
+def _comparative_export_doc() -> dict | None:
     path = _comparative_export_path()
     if path not in _COMPARATIVE_EXPORT_CACHE:
         try:
@@ -417,7 +418,53 @@ def _comparative_rank(task_type: str, agent: str) -> int | None:
             print(f"[router] cannot load comparative export {path}: {exc}", file=sys.stderr)
             _COMPARATIVE_EXPORT_CACHE[path] = None
     doc = _COMPARATIVE_EXPORT_CACHE[path]
-    if not isinstance(doc, dict):
+    return doc if isinstance(doc, dict) else None
+
+
+# P3 (owner, 2026-11-27): the comparative LP's assignment TILTS the pacing draw instead of being a
+# tiebreak the draw never reaches. Weight = posterior x pacing x (floor + LP share). The floor keeps
+# every family in the draw, including those the LP cannot measure yet (no usage, flat plan, too few
+# judged runs), so their records keep updating; the LP is linear and gives all-or-nothing splits.
+COMPARATIVE_TILT_FLOOR = 0.25
+
+
+def _comparative_tilt_floor() -> float:
+    raw = (os.environ.get("ORCH_COMPARATIVE_TILT_FLOOR") or "").strip()
+    try:
+        value = float(raw) if raw else COMPARATIVE_TILT_FLOOR
+    except ValueError:
+        return COMPARATIVE_TILT_FLOOR
+    # A zero or negative floor would remove every family the LP left unassigned from the draw.
+    return value if math.isfinite(value) and value > 0 else COMPARATIVE_TILT_FLOOR
+
+
+def _comparative_shares(task_type: str) -> dict[str, float] | None:
+    """Each agent's share of the LP's assigned runs for this task type, or None when not live."""
+    doc = _comparative_export_doc()
+    block = doc.get("comparative") if doc else None
+    if not isinstance(block, dict) or block.get("route_enabled") is not True:
+        return None
+    assignment = block.get("assignment")
+    cells = assignment.get(task_type) if isinstance(assignment, dict) else None
+    if not isinstance(cells, dict):
+        return None
+    runs = {
+        agent: float(value)
+        for agent, value in cells.items()
+        if isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value > 0
+    }
+    total = sum(runs.values())
+    if total <= 0:
+        return None
+    return {agent: value / total for agent, value in runs.items()}
+
+
+def _comparative_rank(task_type: str, agent: str) -> int | None:
+    doc = _comparative_export_doc()
+    if doc is None:
         return None
     comparative_block = doc.get("comparative")
     if (
@@ -580,8 +627,12 @@ def _measured_pacing(row: dict) -> bool:
     return pace.get("state") in ("ok", "warn", "shed") and pace.get("routing_weight") is not None
 
 
-def _pacing_choice(scored, cap, learned, rng):
-    """Posterior × literal pacing weight; warn-zero before shed fallback."""
+def _pacing_choice(scored, cap, learned, rng, tilt=None):
+    """Posterior × literal pacing weight; warn-zero before shed fallback.
+
+    `tilt` ({agent: LP share}, from `_comparative_shares`) multiplies each weight by
+    floor + share; an agent absent from the LP keeps the floor. Fail-toward-motion is untouched.
+    """
 
     def measured(row):
         agent = row[1]["agent"]
@@ -628,7 +679,13 @@ def _pacing_choice(scored, cap, learned, rng):
     policy = (
         "posterior*pacing" if positive else "fallback-warn" if non_shed else "fail-toward-motion"
     )
-    weights = [r[1] * (r[2] if positive else 1.0) for r in tier]
+    floor = _comparative_tilt_floor() if tilt else 0.0
+    weights = [
+        r[1]
+        * (r[2] if positive else 1.0)
+        * ((floor + tilt.get(r[0][1]["agent"], 0.0)) if tilt else 1.0)
+        for r in tier
+    ]
     # Zero posterior mass is uninformative; it must not stop all-shed motion.
     if sum(weights) <= 0:
         weights = [1.0] * len(tier)
@@ -650,6 +707,8 @@ def _pacing_choice(scored, cap, learned, rng):
             for r in rows
         ],
     }
+    if tilt and policy != "fail-toward-motion":
+        decision["comparative_tilt"] = {"floor": floor, "shares": dict(sorted(tilt.items()))}
     return picked[0], decision
 
 
@@ -926,7 +985,13 @@ def select_agent(
                 )
     baseline_picked = base_scored[0]
     if pacing_active and not explored and not cold_start:
-        picked, pacing_decision = _pacing_choice(base_scored, cap, learned, rng)
+        picked, pacing_decision = _pacing_choice(
+            base_scored,
+            cap,
+            learned,
+            rng,
+            tilt=_comparative_shares(task_type) if comparative_on else None,
+        )
         if comparative_on and pacing_decision is None:
             # Comparative keys follow the five capacity keys: the same candidates
             # reach the same unmeasured fallback in either ordering. Replaying
