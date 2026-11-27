@@ -5,11 +5,15 @@ name: Lane seat (hosted controller)
 # lanes `state` branch) is older than lane_state.HOSTED_STALE_AFTER (45 min). Ledgers travel on that branch, so a
 # hosted pass decides from the same state a local pass would. Design and stop rules:
 # Audits/closer-lane-2026-11/rebuild/HOSTED_SEAT_DESIGN.md (owner workspace).
-# Scheduled lanes: closer-core and sync-core (closer parity 2026-11-25, Orchestrator run 45544064284).
-# Opener-core remains manual opt-in. The 2026-11-25 Linux shadow matched the Mac cap, demand, and all eight decisions:
+# Scheduled lanes: closer-core and sync-core. The owner accepted three clean hosted-alone passes out of four
+# planned. The Mac replayed all 56 journaled calls with zero rejected.
+# Opener-core is manual opt-in until one hosted judge call and one hosted opener start are observed. The
+# 2026-11-25 Linux shadow matched the Mac cap, demand, and eight decisions without exercising either action:
 # https://github.com/stranske/Orchestrator/actions/runs/45601106673/job/139159949563
-# Before scheduling opener-core, verify five attributable hosted starts and their downstream receipts, plus retry
-# and concurrent-claim checks. The 2026-11-25 comparison had zero of five attributable hosted starts.
+# To retire the legacy Workflows Auto-Pilot handoff route after scheduling, verify one start per eligible
+# handoff across five handoffs, a hosted start during a local-seat outage, and parity through retry and restart.
+# Also verify that concurrent local and hosted wakes produce one shared claim and one start. Keep the handoff
+# label through those checks and verify exact-head closure and receiving sync before retiring the route.
 #
 # pull_request: a read-only shadow round (never leases, never pushes state).
 # workflow_dispatch: mode shadow (default) or apply; force skips the staleness check (never a live lease).
