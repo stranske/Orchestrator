@@ -2167,9 +2167,12 @@ results carry `usage: {}`, so 0 of 1,022 runs are priced), Vibe (flat plan, no p
 Muse and agy (fewer than 20 judged runs on any class). The tilt is recorded in
 `pacing_decision.comparative_tilt` (floor and shares); `route_source` keeps its meaning.
 Fail-toward-motion is untouched, and `ORCH_LOCAL_COMPARATIVE=0` turns the tilt off with the rank.
-Pass number: over the next 50 implement starts after deploy, the per-family split is within
-total-variation distance 0.25 of the LP assignment, and those starts' durable / (durable +
-broke_later) is not below 95%.
+Pass number (two criteria, no dates): of the next 50 local implement starts after the deploy, at
+least 40% go to the families the LP assigns implement to (baseline: 13.6% of 772 local implement
+starts since 2026-11-10 went to Gemini, the LP's pick); and once 30 of those starts have a resolved
+durability, durable / (durable + broke_later) is at least 95%. The floor makes the LP's own split
+unreachable by design (one assigned family among five draws about 55%), so the measure is the shift
+toward the assigned families, not distance from the LP.
 The live pass number requires at least one differing class with measured Codex and Claude prices
 over the 14-day pacing-history window, checked no earlier than 2026-11-07 and 14 days after
 the first #668 state. Fixture success does not meet that live pass number or enable consumption.
