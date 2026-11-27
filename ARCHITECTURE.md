@@ -2212,9 +2212,15 @@ carries `comparative.assignment[task_type]`, each candidate's draw weight is mul
 `floor + share`, where share is the agent's fraction of the LP's assigned runs for that class and the
 floor is `COMPARATIVE_TILT_FLOOR` (0.25, `ORCH_COMPARATIVE_TILT_FLOOR`, never zero). The floor is the
 owner's choice over following the LP directly: the LP is linear and gives all-or-nothing splits, and
-families it cannot measure yet stay in the draw. Those are Cursor (measured 2026-11-27: its CLI
-results carry `usage: {}`, so 0 of 1,022 runs are priced), Vibe (flat plan, no pacing source), and
-Muse and agy (fewer than 20 judged runs on any class). The tilt is recorded in
+families it cannot measure yet stay in the draw. Those are Vibe (flat plan, no pacing source) and
+Muse and agy (fewer than 20 judged runs on any class). Cursor was one until 2026-11-27: its CLI
+result carries `usage` (input, output, cache read and cache write tokens) but no `model`, so
+`adapters.cursor_result_cost` priced none of it. It now prices from the run's requested model
+(`cursor:composer-2.5` on the ledger start row) at Composer 2.5 list prices, cache tokens included,
+and `ledger_reconcile` re-prices runs it had recorded as unpriced (56 lane runs since 11-13). The
+daily `ledger-reconcile` step had also failed 118 ticks in a row since 10-24 with its output sent to
+/dev/null, so nothing priced Cursor even when a parser could have; the tick now logs that step to
+`ledger-reconcile.log` and puts the last line in the failure hint. The tilt is recorded in
 `pacing_decision.comparative_tilt`: floor, shares, and `tier`, each drawn candidate's weight without
 (`base`) and with (`tilted`) the tilt. `route_source` keeps its meaning.
 Fail-toward-motion is untouched, and `ORCH_LOCAL_COMPARATIVE=0` turns the tilt off with the rank.

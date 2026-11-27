@@ -929,7 +929,9 @@ def reconcile(
                 bucket = _settle_provider_limit_death(run_id, refusal, dry_run=dry_run)
                 provider_limit_deaths[bucket] += 1
         existing_source = sources.get(run_id)
-        protected_cursor_cost = existing_source in adapters.CURSOR_CLI_COST_SOURCES
+        # Only a PRICED terminal result is protected (completion evidence can arrive after it). An
+        # unmeasured one is re-read every pass, so a parser that learns to price it backfills it.
+        protected_cursor_cost = existing_source == adapters.CURSOR_CLI_COST_SOURCE
         cursor_json_output = any(
             row.get("agent") == "cursor" and row.get("cursor_json_output") is True
             for row in run_rows
@@ -996,9 +998,27 @@ def reconcile(
                 continue
             tokens_in, tokens_out, cost_usd = None, None, None
             if result is not None:
-                tokens_in, tokens_out, cost_usd, source = adapters.cursor_result_cost(result)
+                requested = next(
+                    (
+                        str(r.get("requested_model") or r.get("model"))
+                        for r in run_rows
+                        if r.get("event") == "start"
+                        and (r.get("requested_model") or r.get("model"))
+                    ),
+                    None,
+                )
+                tokens_in, tokens_out, cost_usd, source = adapters.cursor_result_cost(
+                    result, requested
+                )
                 if cost_usd is not None:
                     log_costs_harvested += 1
+            if (
+                existing_source in adapters.CURSOR_CLI_COST_SOURCES
+                and source != adapters.CURSOR_CLI_COST_SOURCE
+            ):
+                # Still unpriceable: keep the recorded absence rather than rewrite it every pass.
+                skipped[f"{existing_source}_cost_exists"] += 1
+                continue
         else:
             tokens_in, tokens_out = _log_usage(log_file, run_id, writers)
             cost_usd = sum(float(_number(r.get("cost_usd")) or 0.0) for r in run_rows)
