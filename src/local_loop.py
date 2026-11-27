@@ -450,7 +450,10 @@ def default_rotate(task_type: str, tried: set[str]) -> str | None:
         learned=(router.learned_ranks() or {}).get(task_type),
         only=(known - tried) or {"__none__"},
     )
-    return pick["agent"] if pick and pick.get("agent") not in tried else None
+    agent = pick["agent"] if pick and pick.get("agent") not in tried else None
+    # The rotated-to round is a router decision; LocalLoop hands this to the launch so the run keeps it.
+    setattr(default_rotate, "last_decision", router.route_decision_record(pick) if agent else None)
+    return agent
 
 
 def default_hosted_agent(task_type: str, current: str) -> str | None:
@@ -477,7 +480,9 @@ def default_acceptance(pr_target: str, issue_target: str | None, body: str, head
     }
 
 
-def default_launch(agent: str, pr_target: str, prompt: str, rationale: str) -> dict:
+def default_launch(
+    agent: str, pr_target: str, prompt: str, rationale: str, route_decision: dict | None = None
+) -> dict:
     """One round through the Orchestrator's own delegation rail: claim + the PR's head-branch worktree
     (lane closer, reused across rounds) + detached agent, recorded with mode=local and this rationale.
     """
@@ -507,6 +512,8 @@ def default_launch(agent: str, pr_target: str, prompt: str, rationale: str) -> d
         "--rationale",
         rationale,
     ]
+    if route_decision:
+        argv += ["--route-decision", json.dumps(route_decision, default=str)]
     env = {k: v for k, v in os.environ.items() if "proxy" not in k.lower()}
     env["PATH"] = (
         f"/opt/homebrew/bin:{Path.home()}/.local/bin:{Path.home()}/.cursor/bin:"
@@ -816,6 +823,9 @@ class Tick:
                     f"{STALL_ROUNDS} unproductive rounds and no untried local agent ({', '.join(sorted(tried))})",
                 )
             st.update(agent=nxt, tried=sorted(tried | {nxt}), unproductive=0)
+            decision = getattr(self.rotate, "last_decision", None)
+            if isinstance(decision, dict) and decision.get("chosen") == nxt:
+                st["route_decision"] = decision
             cause = f"agent rotated after {STALL_ROUNDS} unproductive rounds. " + cause
         cap = self.cap()
         if not cap["ok"]:
@@ -838,7 +848,17 @@ class Tick:
         rationale = f"local-loop round {n}/{ROUND_CAP}: {cause[:160]}; {cap['reason']}"
         if not self.apply:
             return {"action": "would-round", "reason": cause[:200]}
-        res = self.launch(st["agent"], st["target"], prompt, rationale)
+        decision = st.get("route_decision")
+        res = self.launch(
+            st["agent"],
+            st["target"],
+            prompt,
+            rationale,
+            **({"route_decision": decision} if decision else {}),
+        )
+        if not res.get("error"):
+            # Only the rotated-to round was a router decision; later rounds continue the same agent.
+            st.pop("route_decision", None)
         if res.get("error"):
             st["start_errors"] = int(st.get("start_errors", 0)) + 1
             if st["start_errors"] >= START_ERRORS:

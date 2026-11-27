@@ -726,3 +726,40 @@ def test_delegate_heartbeat_binds_run_identity_and_never_blocks_delivery(
     )
     if failing:
         assert "telemetry unavailable" in capsys.readouterr().err
+
+
+def test_routing_metadata_keeps_a_caller_pin_route_decision():
+    """P3 (2026-11-27): an opener start or local-loop rotation names --agent, but the router chose it.
+    The run stays a caller pin (exploration_review must not credit the router) and keeps the decision.
+    """
+    decision = {"chosen": "gemini", "route_source": "route_weights", "policy": "posterior*pacing"}
+    meta = dispatcher._routing_metadata({"caller_pinned": True, "route_decision": decision})
+    assert meta["source"] == "caller_pinned" and meta["route_decision"] == decision
+    assert "route_decision" not in dispatcher._routing_metadata({"caller_pinned": True})
+
+
+@pytest.mark.parametrize(
+    ("flag", "expected"),
+    [
+        (
+            '{"chosen": "codex", "policy": "posterior*pacing"}',
+            {"chosen": "codex", "policy": "posterior*pacing"},
+        ),
+        ("not json", None),
+    ],
+)
+def test_main_delegate_passes_route_decision_and_ignores_bad_json(
+    tmp_path, monkeypatch, capsys, flag, expected
+):
+    """`--route-decision` reaches delegate; unparseable JSON never stops the start (P3, 2026-11-27)."""
+    seen = {}
+    prompt = tmp_path / "prompt.txt"
+    prompt.write_text("opener start")
+    monkeypatch.setattr(dispatcher, "delegate", lambda *a, **k: seen.update(k) or {"pid": 1})
+    monkeypatch.delenv("ORCH_ROLE_SHADOW", raising=False)
+    argv = ["delegate", "--agent", "codex", "--target", "o/r#3", "--lane", "opener"]
+    argv += ["--prompt-file", str(prompt), "--route-decision", flag]
+    assert dispatcher.main(argv) == 0
+    assert seen.get("route_decision") == expected
+    warned = "delegate: --route-decision ignored" in capsys.readouterr().err
+    assert warned is (expected is None)

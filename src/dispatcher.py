@@ -1571,6 +1571,7 @@ def _routing_metadata(assignment: dict) -> dict | None:
         "capability_fallback": assignment.get("capability_fallback"),
         "capability_dispatch_result": assignment.get("capability_dispatch_result"),
         "requested_profile_id": assignment.get("requested_profile_id"),
+        "route_decision": assignment.get("route_decision"),
     }
     return {key: value for key, value in metadata.items() if value not in (None, "", [], {})}
 
@@ -2543,6 +2544,7 @@ def delegate(
     review_run_id: str | None = None,
     continue_pr: int | None = None,
     rationale: str | None = None,
+    route_decision: dict | None = None,
 ) -> dict:
     """One ad-hoc delegation for the assessing orchestrator seat: claim + provision + spawn
     ONE cheap agent with the orchestrator's OWN crafted prompt (detached, PATH+auth+release
@@ -2640,6 +2642,10 @@ def delegate(
         "review_run_id": review_run_id,
         "rationale": rationale,
     }
+    if isinstance(route_decision, dict) and route_decision:
+        # The caller named the agent, but the router chose it (opener start, local-loop rotation):
+        # keep the router's decision so the run can be graded against it (campaign P3, 2026-11-27).
+        a["route_decision"] = route_decision
     if codex_override_effort:
         a["reasoning_effort"] = codex_override_effort
     if profile_id:
@@ -6473,6 +6479,10 @@ def main(argv: list[str]) -> int:
             "--rationale", help="why this start runs locally (router.choose_mode reason)"
         )
         p.add_argument(
+            "--route-decision",
+            help="JSON of router.route_decision_record for the pick that named --agent (kept on the run)",
+        )
+        p.add_argument(
             "--review-loop",
             action="store_true",
             help="require independent exact-head review after terminal writer release",
@@ -6494,6 +6504,16 @@ def main(argv: list[str]) -> int:
             print("role activation off (ORCH_ROLE_SHADOW unset)", file=sys.stderr)
         prompt = ns.prompt if ns.prompt is not None else Path(ns.prompt_file).read_text()
         review_kwargs: dict[str, Any] = {"review_loop": True} if ns.review_loop else {}
+        route_decision = None
+        route_kwargs: dict[str, Any] = {}
+        if ns.route_decision:
+            try:
+                route_decision = json.loads(ns.route_decision)
+            except ValueError as exc:
+                # A bad attribution must never stop a start; the run is then recorded as a plain pin.
+                print(f"delegate: --route-decision ignored ({exc})", file=sys.stderr)
+        if isinstance(route_decision, dict):
+            route_kwargs["route_decision"] = route_decision
         out = delegate(
             ns.agent,
             ns.target,
@@ -6506,6 +6526,7 @@ def main(argv: list[str]) -> int:
             influenced_by_role_run_ids=ns.influenced_by_role_run_id,
             **review_kwargs,
             **({"rationale": ns.rationale} if ns.rationale else {}),
+            **route_kwargs,
             **({"branch_prefix": ns.branch_prefix} if ns.branch_prefix is not None else {}),
         )
         print(json.dumps(out, default=str))

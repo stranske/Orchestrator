@@ -534,7 +534,14 @@ def test_lp_assignment_tilts_the_paced_draw_with_a_floor(tmp_path, monkeypatch):
     _write_assignment_export(tmp_path, {"gemini": 223.5})
     counts = _paced_tier_counts()
     decision = counts.pop("_decision")
-    assert decision["comparative_tilt"] == {"floor": 0.25, "shares": {"gemini": 1.0}}
+    tilt = decision["comparative_tilt"]
+    assert {k: tilt[k] for k in ("floor", "shares")} == {"floor": 0.25, "shares": {"gemini": 1.0}}
+    # Each drawn candidate keeps its no-tilt and tilted weight, so a run can be graded against both.
+    tier = {row["agent"]: row for row in tilt["tier"]}
+    assert set(tier) == {"codex", "claude", "gemini", "cursor"}
+    assert tier["gemini"]["tilted"] == pytest.approx(tier["gemini"]["base"] * 1.25)
+    for agent in ("codex", "claude", "cursor"):
+        assert tier[agent]["tilted"] == pytest.approx(tier[agent]["base"] * 0.25)
     # Expected shares: gemini 1.25 / (1.25 + 3 x 0.25) = 62.5%; each other family 12.5%.
     total = sum(counts.values())
     assert 0.57 < counts["gemini"] / total < 0.68
@@ -578,3 +585,39 @@ def test_comparative_shares_drop_non_finite_assignments(tmp_path, monkeypatch):
     _write_assignment_export(tmp_path, {"gemini": float("inf"), "claude": 3.0, "codex": 1.0})
     router._COMPARATIVE_EXPORT_CACHE.clear()
     assert router._comparative_shares("implement") == {"claude": 0.75, "codex": 0.25}
+
+
+def test_route_decision_record_keeps_choice_source_and_tilt(tmp_path, monkeypatch):
+    """The record a run keeps (P3, 2026-11-27): chosen agent, route_source, policy and the tilt."""
+    _no_model_catalog(monkeypatch)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    monkeypatch.delenv("ORCH_LOCAL_COMPARATIVE", raising=False)
+    monkeypatch.delenv("ORCH_COMPARATIVE_TILT_FLOOR", raising=False)
+    _write_assignment_export(tmp_path, {"gemini": 223.5})
+    cap = {
+        "agents": {
+            "codex": {"state": "ok", "pacing": {"state": "ok", "routing_weight": 1.0}},
+            "gemini": {"state": "ok"},
+        }
+    }
+    learned = {a: {"posterior": 0.5, "score": 0.5, "rank": 0} for a in cap["agents"]}
+    router._COMPARATIVE_EXPORT_CACHE.clear()
+    pick = router.select_agent(
+        "implement",
+        cap,
+        only=set(cap["agents"]),
+        learned=learned,
+        exploration_rate=0.0,
+        rng=random.Random(3),
+        simulate=True,
+    )
+    record = router.route_decision_record(pick)
+    assert record["chosen"] == pick["agent"]
+    assert record["route_source"] == pick["route_source"]
+    assert record["policy"] == "posterior*pacing"
+    assert record["comparative_tilt"]["shares"] == {"gemini": 1.0}
+    json.dumps(record)  # it travels on a command line and into routing_metadata
+    assert router.route_decision_record(None) is None
+    assert (
+        router.route_decision_record({"agent": "codex"}) is None
+    )  # nothing drawn, nothing to grade
