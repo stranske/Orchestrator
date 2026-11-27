@@ -43,6 +43,7 @@ import capabilities
 import claims
 import execution_profiles
 import feedback
+import muse_ladder
 
 HANDOFF = Path(os.environ.get("HANDOFF_DIR", Path.home() / ".codex" / "handoff"))
 CAPACITY_JSON = HANDOFF / "capacity.json"
@@ -133,6 +134,8 @@ ROUTE_TABLE: dict = {
             {"agent": "vibe", "mode": "cheap", "late": False},
             {"agent": "codex", "mode": "mid", "late": False},
             {"agent": "claude", "mode": "cheap", "late": False},
+            # Late seat lifted by the ladder (muse_ladder, owner 2026-11-27): rung 1 is always open.
+            {"agent": "muse", "mode": "cheap", "late": True},
         ],
     },
     "implement": {
@@ -732,7 +735,7 @@ def route_decision_record(pick: dict | None) -> dict | None:
     if not pick or not pick.get("agent"):
         return None
     decision = pick.get("pacing_decision") or {}
-    if not decision:
+    if not decision and not pick.get("muse_ladder"):
         return None
     record = {
         "chosen": pick["agent"],
@@ -741,6 +744,8 @@ def route_decision_record(pick: dict | None) -> dict | None:
     }
     if decision.get("comparative_tilt"):
         record["comparative_tilt"] = decision["comparative_tilt"]
+    if pick.get("muse_ladder"):
+        record["muse_ladder"] = pick["muse_ladder"]
     return record
 
 
@@ -763,6 +768,7 @@ def select_agent(
     simulate: bool = False,
     closer_category: str | None = None,
     independent_of_provider: str | None = None,
+    size_tasks: int | None = None,
 ):
     """Pick the best available agent entry for a task, or None if none have capacity.
 
@@ -868,6 +874,12 @@ def select_agent(
     base_scored: list[ScoredSelection] = []
     comparative_on = profile_transport == "local" and _local_comparative_enabled()
     pacing_active = any(_measured_pacing(r) for r in cap.get("agents", {}).values())
+    # Muse's ladder (owner 2026-11-27): on work at or below its level it is not a late seat.
+    ladder = (
+        muse_ladder.decision(task_type, size_tasks)
+        if profile_transport == "local" and not neutral
+        else None
+    )
     for idx, entry in enumerate(spec["agents"]):
         if entry["agent"] == "gemini" and _policy(cap, "gemini") == "agy-third-party-fallback":
             import agy_fallback
@@ -948,7 +960,12 @@ def select_agent(
         over_cap = 1 if load.get(entry["agent"], 0) >= per_agent_cap else 0
         score: Score = (
             over_cap,
-            0 if not entry["late"] else 1,
+            (
+                0
+                if not entry["late"]
+                or (entry["agent"] == muse_ladder.LADDER_AGENT and ladder and ladder["lifted"])
+                else 1
+            ),
             0 if st == "ok" else 1,
             (
                 (
@@ -1055,6 +1072,7 @@ def select_agent(
         "capacity_policy": _policy(cap, entry["agent"]),
         "route_source": route_source,
         **({"pacing_decision": pacing_decision} if pacing_decision else {}),
+        **({"muse_ladder": ladder} if ladder else {}),
         "exploration": explored,
         "exploration_mode": _exploration_mode(exploration_mode) if explored else "",
         **(
@@ -1500,6 +1518,7 @@ def choose_mode(
     learned: dict | None = None,
     needs_local: str = "",
     local: dict | None = None,
+    size_tasks: int | None = None,
 ) -> dict:
     """Where the next start runs: {agent, mode: 'local'|'remote'|None, reason, local, route_source}.
 
@@ -1527,7 +1546,11 @@ def choose_mode(
             "local": local,
         }
     if local["ok"]:
-        pick = select_agent(task_type, cap, learned=learned, only=untried) if untried else None
+        pick = (
+            select_agent(task_type, cap, learned=learned, only=untried, size_tasks=size_tasks)
+            if untried
+            else None
+        )
         if pick and pick.get("agent") and pick["agent"] not in tried:
             why = f"needs local ({needs_local})" if needs_local else "local first"
             return {

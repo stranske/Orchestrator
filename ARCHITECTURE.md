@@ -2224,6 +2224,22 @@ daily `ledger-reconcile` step had also failed 118 ticks in a row since 10-24 wit
 `pacing_decision.comparative_tilt`: floor, shares, and `tier`, each drawn candidate's weight without
 (`base`) and with (`tilted`) the tilt. `route_source` keeps its meaning.
 Fail-toward-motion is untouched, and `ORCH_LOCAL_COMPARATIVE=0` turns the tilt off with the rank.
+**Muse's work ladder (owner, 2026-11-27, campaign P3 gap C).** Muse was a late implement seat, drawn
+only when no other seat had capacity, so it gathered 17 implement runs in two weeks and the LP could not
+rank it. `muse_ladder` gives it simple work first and harder work as it succeeds. The rung belongs to
+the work: 1 is `mechanical` (Muse now sits in that table as a late seat) and `implement` issues with
+1-2 tasks; 2 is 3-4 tasks; 3 is larger. An issue of unknown size has no rung and never lifts Muse. The
+opener passes the issue's `## Tasks` count as `choose_mode(size_tasks=...)`. On work at or below
+Muse's level, `select_agent` stops treating Muse as late, so it joins the ordinary draw at the tilt's
+floor (about 12-15% of those draws). Muse's level is computed from the Brain on every read: level 1
+is always open; level L+1 opens at 5 or more resolved rung-L outcomes, 80% or more of them durable;
+a rung that falls below the bar closes the rungs above it again. The rung is recorded on the run
+(`route_decision.muse_ladder`), so outcomes are counted against the work Muse was given. Measured
+rung-1 demand in the 14 days to 11-27: 61 mechanical runs and 20 issues of 1-2 tasks. Kill switch
+`ORCH_MUSE_LADDER=0`; `python3 src/muse_ladder.py` prints the level and each rung's count and rate.
+Pass number (criterion): Muse has 5 or more resolved rung-1 outcomes, and the printed level equals
+the rule applied to them.
+
 **The decision reaches the run record (2026-11-27).** The opener's local start and the local loop's
 rotation and closer-core's repair start all name `delegate --agent` themselves, so their runs were
 stored as `caller_pinned` and the router's decision was dropped: 0 of 21 local implement runs after the
