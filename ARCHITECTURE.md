@@ -2212,9 +2212,15 @@ carries `comparative.assignment[task_type]`, each candidate's draw weight is mul
 `floor + share`, where share is the agent's fraction of the LP's assigned runs for that class and the
 floor is `COMPARATIVE_TILT_FLOOR` (0.25, `ORCH_COMPARATIVE_TILT_FLOOR`, never zero). The floor is the
 owner's choice over following the LP directly: the LP is linear and gives all-or-nothing splits, and
-families it cannot measure yet stay in the draw. Those are Cursor (measured 2026-11-27: its CLI
-results carry `usage: {}`, so 0 of 1,022 runs are priced), Vibe (flat plan, no pacing source), and
-Muse and agy (fewer than 20 judged runs on any class). The tilt is recorded in
+families it cannot measure yet stay in the draw. Those are Vibe (flat plan, no pacing source) and
+Muse and agy (fewer than 20 judged runs on any class). Cursor was one until 2026-11-27: its CLI
+result carries `usage` (input, output, cache read and cache write tokens) but no `model`, so
+`adapters.cursor_result_cost` priced none of it. It now prices from the run's requested model
+(`cursor:composer-2.5` on the ledger start row) at Composer 2.5 list prices, cache tokens included,
+and `ledger_reconcile` re-prices runs it had recorded as unpriced (56 lane runs since 11-13). The
+daily `ledger-reconcile` step had also failed 118 ticks in a row since 10-24 with its output sent to
+/dev/null, so nothing priced Cursor even when a parser could have; the tick now logs that step to
+`ledger-reconcile.log` and puts the last line in the failure hint. The tilt is recorded in
 `pacing_decision.comparative_tilt`: floor, shares, and `tier`, each drawn candidate's weight without
 (`base`) and with (`tilted`) the tilt. `route_source` keeps its meaning.
 Fail-toward-motion is untouched, and `ORCH_LOCAL_COMPARATIVE=0` turns the tilt off with the rank.
@@ -2254,6 +2260,13 @@ the LP's assignment changing between exports cannot move the bar. The first vers
 (at least 40% of all local implement starts to the families assigned at read time, baseline 13.6%)
 was wrong twice over: the export's assignment grew from Gemini alone to Claude, Codex and Gemini, whose
 pre-tilt share was already 65.7%, and it counted runs no router chose.
+**Value-chain monitor row (`comparative-tilt`, 2026-11-27).** Declared `wired` in `KNOWN_GATES` beside
+`route-weights-export` (`entrypoint` `router.py:_pacing_choice`, `flags_defaults` `ORCH_LOCAL_COMPARATIVE=1`,
+kill switch `ORCH_LOCAL_COMPARATIVE=0`, bound on `rail-exercise:routing`). `value_chain_monitor.py` reads the
+Brain's `runs` and `outcomes` tables directly: demand is local implement runs with `routing_metadata.route_decision`;
+invocation is those carrying `route_decision.comparative_tilt`; usable requires positive `base` and `tilted` tier
+weight sums; acted_on requires a non-empty `agent`; outcome counts `durability` in (`durable`, `broke_later`), and
+success counts `durable`. An unreadable Brain leaves all counts `None` with a reason, never `0`.
 The live pass number requires at least one differing class with measured Codex and Claude prices
 over the 14-day pacing-history window, checked no earlier than 2026-11-07 and 14 days after
 the first #668 state. Fixture success does not meet that live pass number or enable consumption.

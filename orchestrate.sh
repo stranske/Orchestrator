@@ -1148,11 +1148,21 @@ if _cadence_due langsmith-direct && _attempt_ok langsmith-direct; then
 fi
 if _cadence_due ledger-reconcile && _attempt_ok ledger-reconcile; then
   echo "  [cadence] local ledger reconciliation (daily)"
-  if python3 "$ORCH/ledger_reconcile.py" reconcile --strict >/dev/null 2>&1; then _mark_success ledger-reconcile; else _mark_fail ledger-reconcile; fi
+  # Output to its own log (2026-11-27): 118 consecutive failures since 10-24 said nothing about WHY,
+  # because stdout and stderr went to /dev/null; the fail hint now carries the log's last line.
+  if python3 "$ORCH/ledger_reconcile.py" reconcile --strict >> "$STAMP_DIR/ledger-reconcile.log" 2>&1; then
+    _mark_success ledger-reconcile
+  else
+    _mark_fail ledger-reconcile "$(tail -n 1 "$STAMP_DIR/ledger-reconcile.log" 2>/dev/null | cut -c1-200)"
+  fi
 fi
 if _cadence_due ccusage-reconcile && _attempt_ok ccusage-reconcile; then
   echo "  [cadence] ccusage per-run attribution (daily)"
-  if python3 "$ORCH/ccusage_reconcile.py" reconcile --strict >/dev/null 2>&1; then _mark_success ccusage-reconcile; else _mark_fail ccusage-reconcile; fi
+  if python3 "$ORCH/ccusage_reconcile.py" reconcile --strict >> "$STAMP_DIR/ccusage-reconcile.log" 2>&1; then
+    _mark_success ccusage-reconcile
+  else
+    _mark_fail ccusage-reconcile "$(tail -n 1 "$STAMP_DIR/ccusage-reconcile.log" 2>/dev/null | cut -c1-200)"
+  fi
 fi
 if _cadence_due range-rollout && _attempt_ok range-rollout; then
   # item 14 (2026-07-08 audit): the five range lanes (testgen/epic/codemod/cross_repo/runtime_ac)

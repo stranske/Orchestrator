@@ -1041,6 +1041,12 @@ def select_agent(
             rng,
             tilt=_comparative_shares(task_type) if comparative_on else None,
         )
+        if pacing_decision and pacing_decision.get("comparative_tilt") and not simulate:
+            _capability_heartbeat(
+                "comparative-tilt",
+                "invocation",
+                ref=f"{task_type}:{entry_agent(picked)}",
+            )
         if comparative_on and pacing_decision is None:
             # Comparative keys follow the five capacity keys: the same candidates
             # reach the same unmeasured fallback in either ordering. Replaying

@@ -1139,6 +1139,12 @@ PREDICATE_FIXTURES: tuple[dict[str, Any], ...] = (
         "the fixture proves a thresholded, reserve-separated fail-open export without publishing.",
     },
     {
+        "capability": "comparative-tilt",
+        "check": _check_value_chain_monitor,
+        "source": "2026-11-27 campaign P3 (#1503/#1508): comparative tilt value-chain accounting "
+        "from local implement Brain runs uses the monitor's read-only fixture.",
+    },
+    {
         "capability": "rail-exercise-cadence",
         "check": _check_rail_exercise_cadence,
         "source": "2026-09-03 program item 5 (#207): 49 round-authored contracts, 48 pass / 48 break "

@@ -331,3 +331,61 @@ def test_cursor_enters_the_solve_only_with_enough_priced_runs(brain):
     assert included["inputs"]["cost"]["cursor"]["implement"] == pytest.approx(expected)
     assert included["assignment"]["implement"]["cursor"] == comparative.MIN_OBS + 2
     assert included["objective"] == pytest.approx((0.9 - expected) * (comparative.MIN_OBS + 2))
+
+
+# Measured on the lane log of Ready#704 (2026-11-27, CLI 2026.11.22): usage present, no `model`.
+READY_704_USAGE = {
+    "inputTokens": 153242,
+    "outputTokens": 5039,
+    "cacheReadTokens": 1221952,
+    "cacheWriteTokens": 0,
+}
+READY_704_COST = (153242 * 0.50 + 1221952 * 0.20 + 5039 * 2.50) / 1_000_000
+
+
+def test_a_result_without_a_model_is_priced_from_the_requested_model_with_cache():
+    result = {"type": "result", "result": "done", "usage": READY_704_USAGE}
+    assert adapters.cursor_result_cost(result, "cursor:composer-2.5") == (
+        153242,
+        5039,
+        pytest.approx(READY_704_COST),
+        adapters.CURSOR_CLI_COST_SOURCE,
+    )
+    write = dict(READY_704_USAGE, cacheReadTokens=0, cacheWriteTokens=1000)
+    _, _, cost, _ = adapters.cursor_result_cost({"usage": write}, "Composer 2.5")
+    assert cost == pytest.approx((153242 * 0.50 + 1000 * 0.50 + 5039 * 2.50) / 1_000_000)
+    # No model anywhere is still unpriced, never guessed.
+    assert adapters.cursor_result_cost(result)[2:] == (None, adapters.CURSOR_CLI_UNKNOWN_PRICE)
+    bad = dict(READY_704_USAGE, cacheReadTokens=-1)
+    assert adapters.cursor_result_cost({"usage": bad}, "composer-2.5")[3] == (
+        adapters.CURSOR_CLI_NO_USAGE
+    )
+
+
+def test_reconcile_reprices_a_run_recorded_as_unpriced(tmp_path, brain):
+    """The 56 lane runs recorded 'no known price' before the fallback existed get priced on the next
+    pass; a run that is still unpriceable keeps its recorded absence and is not rewritten."""
+    log = tmp_path / "example__repo_2.cursor.log"
+    result = {"type": "result", "subtype": "success", "result": "done", "usage": READY_704_USAGE}
+    log.write_text(json.dumps(result) + "\n")
+    feedback.record_run("lane-704", "example/repo#2", "implement", "cursor")
+    feedback.record_cost(
+        "lane-704", tokens_in=153242, tokens_out=5039, source=adapters.CURSOR_CLI_UNKNOWN_PRICE
+    )
+    adapters.record_ledger(
+        "cursor",
+        run_id="lane-704",
+        log_file=str(log),
+        event="start",
+        cursor_json_output=True,
+        model="cursor:composer-2.5",
+    )
+    assert ledger_reconcile.reconcile(adapters.LEDGER)["written_cost_rows"] == 1
+    with closing(feedback._conn()) as conn:
+        row = conn.execute(
+            "SELECT tokens_in,tokens_out,cost_usd,source FROM costs WHERE run_id='lane-704'"
+        ).fetchone()
+    assert row[0:2] == (153242, 5039) and row[3] == adapters.CURSOR_CLI_COST_SOURCE
+    assert row[2] == pytest.approx(READY_704_COST, abs=1e-6)
+    # Priced now, so protected: a second pass writes nothing.
+    assert ledger_reconcile.reconcile(adapters.LEDGER)["written_cost_rows"] == 0

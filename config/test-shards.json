@@ -234,6 +234,7 @@
       "tests/test_ux_review_adversary.py",
       "tests/test_value_chain_monitor.py",
       "tests/test_value_chain_monitor_outcomes.py",
+      "tests/test_value_chain_comparative_tilt.py",
       "tests/test_verify_coverage_mode.py",
       "tests/test_vibe_observing_backend.py",
       "tests/test_worktree_git_refusal_record.py",
