@@ -2232,6 +2232,13 @@ the LP's assignment changing between exports cannot move the bar. The first vers
 (at least 40% of all local implement starts to the families assigned at read time, baseline 13.6%)
 was wrong twice over: the export's assignment grew from Gemini alone to Claude, Codex and Gemini, whose
 pre-tilt share was already 65.7%, and it counted runs no router chose.
+**Value-chain monitor row (`comparative-tilt`, 2026-11-27).** Declared `wired` in `KNOWN_GATES` beside
+`route-weights-export` (`entrypoint` `router.py:_pacing_choice`, `flags_defaults` `ORCH_LOCAL_COMPARATIVE=1`,
+kill switch `ORCH_LOCAL_COMPARATIVE=0`, bound on `rail-exercise:routing`). `value_chain_monitor.py` reads the
+Brain's `runs` and `outcomes` tables directly: demand is local implement runs with `routing_metadata.route_decision`;
+invocation is those carrying `route_decision.comparative_tilt`; usable requires positive `base` and `tilted` tier
+weight sums; acted_on requires a non-empty `agent`; outcome counts `durability` in (`durable`, `broke_later`), and
+success counts `durable`. An unreadable Brain leaves all counts `None` with a reason, never `0`.
 The live pass number requires at least one differing class with measured Codex and Claude prices
 over the 14-day pacing-history window, checked no earlier than 2026-11-07 and 14 days after
 the first #668 state. Fixture success does not meet that live pass number or enable consumption.

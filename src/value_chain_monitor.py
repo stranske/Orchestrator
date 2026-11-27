@@ -118,6 +118,7 @@ INPUT_FLAGS = {
     "role-redirect": ("ORCH_REDIRECT_APPLY_BOOTSTRAP",),
     "redirect-plan": ("ORCH_DISPATCH_LANE",),
     "redirect-policy": ("ORCH_DISPATCH_LANE",),
+    "comparative-tilt": ("ORCH_LOCAL_COMPARATIVE",),
 }
 STALL_SWEEP_LOG = "redirect-sweep.log"
 
@@ -735,6 +736,7 @@ def _sync_core_situations(inputs: dict[str, Any]) -> int | None:
 
 ROUTE_WEIGHTS_EXPORT_CAPABILITY = "route-weights-export"
 ROUTE_WEIGHTS_DELEGATION_SOURCES = frozenset({"route_weights", "route_weights_exploration"})
+COMPARATIVE_TILT_CAPABILITY = "comparative-tilt"
 
 
 def _route_weights_export_situations(inputs: dict[str, Any]) -> int | None:
@@ -776,6 +778,108 @@ def _route_weights_export_outcomes(
     return counts
 
 
+def _parse_route_decision(raw: Any) -> Mapping[str, Any] | None:
+    """Extract a non-empty `route_decision` dict from `runs.routing_metadata`."""
+    meta: Any = raw
+    if isinstance(raw, str):
+        if not raw.strip():
+            return None
+        try:
+            meta = json.loads(raw)
+        except (ValueError, TypeError):
+            return None
+    if not isinstance(meta, Mapping):
+        return None
+    decision = meta.get("route_decision")
+    return decision if isinstance(decision, Mapping) and bool(decision) else None
+
+
+def _tilt_tier_usable(tilt: Mapping[str, Any]) -> bool:
+    """True when `comparative_tilt.tier` carries positive finite `base` and `tilted` sums."""
+    tier = tilt.get("tier")
+    if not isinstance(tier, list) or not tier:
+        return False
+    base_sum = 0.0
+    tilted_sum = 0.0
+    for entry in tier:
+        if not isinstance(entry, Mapping):
+            return False
+        base = entry.get("base")
+        tilted = entry.get("tilted")
+        if (
+            isinstance(base, bool)
+            or isinstance(tilted, bool)
+            or not isinstance(base, (int, float))
+            or not isinstance(tilted, (int, float))
+            or not math.isfinite(base)
+            or not math.isfinite(tilted)
+            or base < 0
+            or tilted < 0
+        ):
+            return False
+        base_sum += float(base)
+        tilted_sum += float(tilted)
+    return base_sum > 0.0 and tilted_sum > 0.0
+
+
+def _comparative_tilt_counts(
+    runs: list[dict[str, Any]] | None,
+) -> dict[str, int | None]:
+    """Count the comparative-tilt value chain from local implement `runs` and `outcomes` rows."""
+    fields = (
+        "demand",
+        "invocation_count",
+        "usable",
+        "acted_on",
+        *CLASS_FIELDS.values(),
+        "outcome_success",
+    )
+    counts: dict[str, int | None] = {field: None for field in fields}
+    if runs is None:
+        return counts
+    demand = 0
+    invocation = 0
+    usable = 0
+    acted_on = 0
+    outcome = 0
+    success = 0
+    for run in runs:
+        if run.get("mode", "local") != "local" or run.get("task_type", "implement") != "implement":
+            continue
+        decision = _parse_route_decision(run.get("routing_metadata"))
+        if decision is None:
+            continue
+        demand += 1
+        tilt = decision.get("comparative_tilt")
+        if not (isinstance(tilt, Mapping) and bool(tilt)):
+            continue
+        invocation += 1
+        if not _tilt_tier_usable(tilt):
+            continue
+        usable += 1
+        agent = run.get("agent")
+        if not (isinstance(agent, str) and agent.strip()):
+            continue
+        acted_on += 1
+        durability = str(run.get("durability") or "").strip().lower()
+        if durability in {"durable", "broke_later"}:
+            outcome += 1
+            if durability == "durable":
+                success += 1
+    counts["demand"] = demand
+    counts["invocation_count"] = invocation
+    counts["usable"] = usable
+    counts["acted_on"] = acted_on
+    counts["outcome"] = outcome
+    counts["outcome_success"] = success
+    return counts
+
+
+def _comparative_tilt_situations(inputs: dict[str, Any]) -> int | None:
+    """Local implement runs whose `routing_metadata.route_decision` exists; None when unread."""
+    return _comparative_tilt_counts(inputs.get("comparative_tilt_runs"))["demand"]
+
+
 # Callables can be replaced/extended without changing reporting or adding telemetry.
 SITUATION_QUERIES: dict[str, Callable[[dict[str, Any]], int | None]] = {
     "closer-core": _closer_core_situations,
@@ -783,6 +887,7 @@ SITUATION_QUERIES: dict[str, Callable[[dict[str, Any]], int | None]] = {
     "opener-core": _opener_core_situations,
     "sync-core": _sync_core_situations,
     ROUTE_WEIGHTS_EXPORT_CAPABILITY: _route_weights_export_situations,
+    COMPARATIVE_TILT_CAPABILITY: _comparative_tilt_situations,
     "role-prompt": _prompt_batches,
     "role-decomposer": _large_issues,
     "role-triage": _open_issues,
@@ -944,6 +1049,8 @@ def acted_on_index(db: Path, now: int, capability_ids) -> tuple[dict[str, int | 
     for cid in capability_ids:
         if cid == ROUTE_WEIGHTS_EXPORT_CAPABILITY:
             index[cid] = _route_weights_export_outcomes(inputs.get("policy_switches"))["acted_on"]
+        elif cid == COMPARATIVE_TILT_CAPABILITY:
+            index[cid] = _comparative_tilt_counts(inputs.get("comparative_tilt_runs"))["acted_on"]
         else:
             index[cid] = int(outcome_counts(cid, own_edges_of(edges, cid))["acted_on"] or 0)
     return index, f"value-chain monitor, {WINDOW_DAYS}d window, {db.name}"
@@ -976,6 +1083,13 @@ def acted_on_window_index(
                 else [s for s in switches if start <= int(s.get("switched_ts") or 0) <= end]
             )
             index[cid] = _route_weights_export_outcomes(bounded_switches)["acted_on"]
+            continue
+        if cid == COMPARATIVE_TILT_CAPABILITY:
+            runs = inputs.get("comparative_tilt_runs")
+            bounded_runs = (
+                None if runs is None else [r for r in runs if start <= int(r.get("ts") or 0) <= end]
+            )
+            index[cid] = _comparative_tilt_counts(bounded_runs)["acted_on"]
             continue
         own = own_edges_of(edges, cid)
         bounded = [e for e in (own or []) if start <= int(e.get("created_ts") or 0) <= end]
@@ -1067,6 +1181,7 @@ def _brain(db: Path, since: int, now: int) -> dict[str, Any]:
         "completion_events": None,
         "edges": None,
         "policy_switches": None,
+        "comparative_tilt_runs": None,
         "errors": [],
     }
     try:
@@ -1126,6 +1241,21 @@ def _brain(db: Path, since: int, now: int) -> dict[str, Any]:
                 ]
             except sqlite3.Error as exc:
                 result["errors"].append(f"route-weights-export policy switches unavailable: {exc}")
+            try:
+                result["comparative_tilt_runs"] = [
+                    dict(r)
+                    for r in con.execute(
+                        "SELECT r.run_id, r.ts, r.mode, r.task_type, r.agent, "
+                        "r.routing_metadata, o.durability "
+                        "FROM runs r "
+                        "LEFT JOIN outcomes o ON o.run_id = r.run_id "
+                        "WHERE r.mode = 'local' AND r.task_type = 'implement' "
+                        "AND r.ts BETWEEN ? AND ?",
+                        (since, now),
+                    )
+                ]
+            except sqlite3.Error as exc:
+                result["errors"].append(f"comparative-tilt runs unavailable: {exc}")
     except (sqlite3.Error, OSError, ValueError) as exc:
         result["errors"].append(f"Brain evidence unavailable: {exc}")
     return result
@@ -1399,6 +1529,20 @@ def report(
             counts["success_scope"] = (
                 "PRs the hosted policy switched from the export, merged and judged durable"
             )
+        if cid == COMPARATIVE_TILT_CAPABILITY:
+            tilt = _comparative_tilt_counts(inputs.get("comparative_tilt_runs"))
+            counts["invocation_count"] = tilt["invocation_count"]
+            counts["usable"] = tilt["usable"]
+            usable_reason = "comparative-tilt runs unread from Brain"
+            counts.update(
+                {
+                    field: tilt[field]
+                    for field in ("acted_on", *CLASS_FIELDS.values(), "outcome_success")
+                }
+            )
+            counts["success_scope"] = (
+                "router-chosen local implement starts drawn with the tilt, merged and judged durable"
+            )
         if cid == feedback.RELAY_PACING_CAPABILITY:
             relay_usable = _relay_usable(inputs, now - WINDOW_DAYS * 86400, now)
             counts["usable"] = None if relay_usable is None else success_count + relay_usable
@@ -1537,6 +1681,52 @@ def recurrence_fixture() -> bool:
     assert situation_count("opener-core", {"opener_core": {"demand": ["o/r#1", "o/r#2"]}}) == 2
     assert situation_count("sync-core", {"sync_core": None}) is None
     assert situation_count("sync-core", {"sync_core": {"demand": 0}}) == 0
+    # comparative-tilt: unread Brain is None; tilted local implement runs count through durable
+    assert situation_count(COMPARATIVE_TILT_CAPABILITY, {}) is None
+    tilt_fixture = _comparative_tilt_counts(
+        [
+            {
+                "mode": "local",
+                "task_type": "implement",
+                "agent": "gemini",
+                "routing_metadata": json.dumps(
+                    {
+                        "route_decision": {
+                            "chosen": "gemini",
+                            "comparative_tilt": {
+                                "floor": 0.25,
+                                "shares": {"gemini": 1.0},
+                                "tier": [{"agent": "gemini", "base": 0.5, "tilted": 0.625}],
+                            },
+                        }
+                    }
+                ),
+                "durability": "durable",
+            },
+            {
+                "mode": "local",
+                "task_type": "implement",
+                "agent": "codex",
+                "routing_metadata": json.dumps({"route_decision": {"chosen": "codex"}}),
+                "durability": "durable",
+            },
+            {
+                "mode": "local",
+                "task_type": "implement",
+                "agent": "codex",
+                "routing_metadata": json.dumps({"caller_pinned": True}),
+                "durability": "durable",
+            },
+        ]
+    )
+    assert (
+        tilt_fixture["demand"],
+        tilt_fixture["invocation_count"],
+        tilt_fixture["usable"],
+        tilt_fixture["acted_on"],
+        tilt_fixture["outcome"],
+        tilt_fixture["outcome_success"],
+    ) == (2, 1, 1, 1, 1, 1)
     assert (
         situation_count(
             "generic-probe",

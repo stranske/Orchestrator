@@ -244,6 +244,52 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
             "but no route-weights export/publish artifact is present"
         ),
     },
+    "comparative-tilt": {
+        "findability_category": "exercise_bound",
+        "findability_rationale": (
+            "Router pacing draw applies the LP comparative tilt automatically on local starts when "
+            "ORCH_LOCAL_COMPARATIVE!=0 and route_enabled is true; rail-exercise:routing offers its "
+            "read-only accounting and draw fixture."
+        ),
+        "status": "wired",
+        "entrypoint": "router.py:_pacing_choice",
+        "matcher": {"kind": "env", "name": "ORCH_LOCAL_COMPARATIVE", "equals": "1"},
+        "trigger_cadence": "per local implement route decision",
+        "flags_defaults": {"ORCH_LOCAL_COMPARATIVE": "1"},
+        "output_artifact": "runs.routing_metadata.route_decision.comparative_tilt",
+        "downstream_consumer": (
+            "router.py:select_agent applies the tilted pacing draw; "
+            "dispatcher.py:_routing_metadata stores route_decision on the run; "
+            "value_chain_monitor.py:report counts its chain"
+        ),
+        "learning_sink": (
+            "feedback.py runs (routing_metadata.route_decision.comparative_tilt) "
+            "and outcomes.durability"
+        ),
+        "gate_reason": (
+            "comparative tilt is wired on local pacing draws (ORCH_LOCAL_COMPARATIVE=1) "
+            "and graded from Brain run records before promotion"
+        ),
+        "gate_evidence": (
+            "tilted draws record pacing_decision.comparative_tilt with floor, shares, "
+            "and per-candidate base/tilted tier weights on runs.routing_metadata.route_decision"
+        ),
+        "evidence_threshold": (
+            "first 50 tilted runs shift LP-assigned share by at least half the intended shift "
+            "and 30 resolved outcomes reach >= 95% durability"
+        ),
+        "kill_switch": "ORCH_LOCAL_COMPARATIVE=0",
+        "rollback": (
+            "set ORCH_LOCAL_COMPARATIVE=0 to disable comparative tilt and rank; "
+            "pacing falls back to base posterior*pacing weights"
+        ),
+        "notes": (
+            "dedup: checked router.py (_pacing_choice, route_decision_record), "
+            "route-weights-export, and thompson-hybrid-routing; comparative tilt (#1503) "
+            "and its decision record (#1508) are live, with no ledger row or value-chain "
+            "monitor row measuring the tilt from runs and outcomes"
+        ),
+    },
     "research-usage-guard": {
         "findability_category": "exercise_bound",
         "findability_rationale": (
