@@ -726,3 +726,12 @@ def test_delegate_heartbeat_binds_run_identity_and_never_blocks_delivery(
     )
     if failing:
         assert "telemetry unavailable" in capsys.readouterr().err
+
+
+def test_routing_metadata_keeps_a_caller_pin_route_decision():
+    """P3 (2026-11-27): an opener start or local-loop rotation names --agent, but the router chose it.
+    The run stays a caller pin (exploration_review must not credit the router) and keeps the decision."""
+    decision = {"chosen": "gemini", "route_source": "route_weights", "policy": "posterior*pacing"}
+    meta = dispatcher._routing_metadata({"caller_pinned": True, "route_decision": decision})
+    assert meta["source"] == "caller_pinned" and meta["route_decision"] == decision
+    assert "route_decision" not in dispatcher._routing_metadata({"caller_pinned": True})

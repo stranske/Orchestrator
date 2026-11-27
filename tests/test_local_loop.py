@@ -150,9 +150,15 @@ def make_tick(
     launches = launches if launches is not None else []
     clock = {"t": now}
 
-    def launch(agent, target, prompt, rationale):
+    def launch(agent, target, prompt, rationale, route_decision=None):
         launches.append(
-            {"agent": agent, "target": target, "prompt": prompt, "rationale": rationale}
+            {
+                "agent": agent,
+                "target": target,
+                "prompt": prompt,
+                "rationale": rationale,
+                "route_decision": route_decision,
+            }
         )
         return {"pid": 1, "log": "/tmp/round.log", "run_id": f"r{len(launches)}"}
 
@@ -327,6 +333,42 @@ def run_round_without_push(gh, launches, clock, **kw):
     tick, more, _ = make_tick(gh, now=clock["t"], launches=launches, **kw)
     tick.run()
     return tick
+
+
+def test_rotation_round_carries_the_router_decision_once():
+    """P3 (2026-11-27): the rotated-to round is a router decision, so its run keeps the decision; the
+    rounds after it continue the same agent and carry none (they are not routing decisions)."""
+    gh = FakeGH([pr_node(state="FAILURE")])
+    launches: list = []
+    tick, _, clock = make_tick(gh, launches=launches)
+    tick.run()
+    run_round_without_push(gh, launches, clock)
+    decision = {"chosen": "claude", "route_source": "route_weights", "policy": "posterior*pacing"}
+
+    def rotate(task, tried):
+        return "claude"
+
+    rotate.last_decision = decision  # type: ignore[attr-defined]
+    run_round_without_push(gh, launches, clock, rotate=rotate)
+    assert launches[-1]["agent"] == "claude" and launches[-1]["route_decision"] == decision
+    run_round_without_push(gh, launches, clock)
+    assert launches[-1]["agent"] == "claude" and launches[-1]["route_decision"] is None
+    assert all(item["route_decision"] is None for item in launches[:-2])
+
+
+def test_rotation_ignores_a_decision_for_another_agent():
+    gh = FakeGH([pr_node(state="FAILURE")])
+    launches: list = []
+    tick, _, clock = make_tick(gh, launches=launches)
+    tick.run()
+    run_round_without_push(gh, launches, clock)
+
+    def rotate(task, tried):
+        return "claude"
+
+    rotate.last_decision = {"chosen": "gemini"}  # type: ignore[attr-defined]
+    run_round_without_push(gh, launches, clock, rotate=rotate)
+    assert launches[-1]["agent"] == "claude" and launches[-1]["route_decision"] is None
 
 
 def test_two_unproductive_rounds_rotate_then_hand_off():

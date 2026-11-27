@@ -2186,14 +2186,27 @@ owner's choice over following the LP directly: the LP is linear and gives all-or
 families it cannot measure yet stay in the draw. Those are Cursor (measured 2026-11-27: its CLI
 results carry `usage: {}`, so 0 of 1,022 runs are priced), Vibe (flat plan, no pacing source), and
 Muse and agy (fewer than 20 judged runs on any class). The tilt is recorded in
-`pacing_decision.comparative_tilt` (floor and shares); `route_source` keeps its meaning.
+`pacing_decision.comparative_tilt`: floor, shares, and `tier`, each drawn candidate's weight without
+(`base`) and with (`tilted`) the tilt. `route_source` keeps its meaning.
 Fail-toward-motion is untouched, and `ORCH_LOCAL_COMPARATIVE=0` turns the tilt off with the rank.
-Pass number (two criteria, no dates): of the next 50 local implement starts after the deploy, at
-least 40% go to the families the LP assigns implement to (baseline: 13.6% of 772 local implement
-starts since 2026-11-10 went to Gemini, the LP's pick); and once 30 of those starts have a resolved
-durability, durable / (durable + broke_later) is at least 95%. The floor makes the LP's own split
-unreachable by design (one assigned family among five draws about 55%), so the measure is the shift
-toward the assigned families, not distance from the LP.
+**The decision reaches the run record (2026-11-27).** The opener's local start and the local loop's
+rotation and closer-core's repair start all name `delegate --agent` themselves, so their runs were
+stored as `caller_pinned` and the router's decision was dropped: 0 of 21 local implement runs after the
+tilt's deploy carried it. Only 9 of those 21 were router decisions (4 opener starts, 2 local-loop
+rotations, 3 closer-core repairs); the other 12 were local-loop rounds that continue the PR's agent (6)
+and experiment arms (6). `router.route_decision_record(pick)` keeps the chosen agent, `route_source`,
+the pacing policy and the tilt; `choose_mode` returns it as `route_decision`; the opener, closer-core's
+repair and the local loop's rotated-to round pass it as `delegate --route-decision`;
+`dispatcher._routing_metadata` stores it on the run. The run stays `caller_pinned`, so exploration_review never credits the router for it.
+Pass number (two criteria, no dates), read only from runs whose `routing_metadata.route_decision`
+carries a tilt: over the first 50, the share that went to an LP-assigned family exceeds the share the
+same draws would have given those families without the tilt (from `tier.base`) by at least half the
+shift the tilt intended (from `tier.tilted`); and once 30 of them have a resolved durability,
+durable / (durable + broke_later) is at least 95%. Each decision is graded against its own baseline, so
+the LP's assignment changing between exports cannot move the bar. The first version of this pass number
+(at least 40% of all local implement starts to the families assigned at read time, baseline 13.6%)
+was wrong twice over: the export's assignment grew from Gemini alone to Claude, Codex and Gemini, whose
+pre-tilt share was already 65.7%, and it counted runs no router chose.
 The live pass number requires at least one differing class with measured Codex and Claude prices
 over the 14-day pacing-history window, checked no earlier than 2026-11-07 and 14 days after
 the first #668 state. Fixture success does not meet that live pass number or enable consumption.

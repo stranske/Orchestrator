@@ -708,8 +708,40 @@ def _pacing_choice(scored, cap, learned, rng, tilt=None):
         ],
     }
     if tilt and policy != "fail-toward-motion":
-        decision["comparative_tilt"] = {"floor": floor, "shares": dict(sorted(tilt.items()))}
+        # `tier` keeps each drawn candidate's weight with and without the tilt, so a run record can be
+        # graded against its own no-tilt baseline (campaign P3 pass number, 2026-11-27).
+        decision["comparative_tilt"] = {
+            "floor": floor,
+            "shares": dict(sorted(tilt.items())),
+            "tier": [
+                {
+                    "agent": r[0][1]["agent"],
+                    "base": r[1] * (r[2] if positive else 1.0),
+                    "tilted": w,
+                }
+                for r, w in zip(tier, weights)
+            ],
+        }
     return picked[0], decision
+
+
+def route_decision_record(pick: dict | None) -> dict | None:
+    """The compact, JSON-safe part of a select_agent pick that a run record keeps: who was chosen, how
+    (route_source, pacing policy) and the comparative tilt with its per-candidate weights. None when the
+    pick carries no pacing decision (nothing was drawn, so there is no decision to grade)."""
+    if not pick or not pick.get("agent"):
+        return None
+    decision = pick.get("pacing_decision") or {}
+    if not decision:
+        return None
+    record = {
+        "chosen": pick["agent"],
+        "route_source": pick.get("route_source"),
+        "policy": decision.get("policy"),
+    }
+    if decision.get("comparative_tilt"):
+        record["comparative_tilt"] = decision["comparative_tilt"]
+    return record
 
 
 def select_agent(
@@ -1498,6 +1530,7 @@ def choose_mode(
                 "reason": f"{why}: {local['reason']}",
                 "local": local,
                 "route_source": pick.get("route_source"),
+                "route_decision": route_decision_record(pick),
             }
         if needs_local:
             return {
