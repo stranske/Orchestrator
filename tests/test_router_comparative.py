@@ -485,6 +485,15 @@ def _write_assignment_export(state_dir: Path, assignment: dict, *, route_enabled
     (state_dir / "route-weights-export.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
+def _no_model_catalog(monkeypatch) -> None:
+    """Pin the model catalog as unreadable, so gemini resolves to its pinned model.
+
+    `adapters.advertised_models` answers from a process-wide memo and an on-disk cache. A catalog an
+    earlier test left there that lacks the pinned gemini model makes gemini unresolvable and drops it
+    from the draw (main's serial reconcile run, 2026-11-27: KeyError 'gemini')."""
+    monkeypatch.setattr(router.adapters, "advertised_models", lambda *a, **k: [])
+
+
 def _paced_tier_counts(n: int = 2000) -> dict[str, int]:
     """Draw n picks from one measured-pacing tier of four families with equal posteriors."""
     cap = {
@@ -518,6 +527,7 @@ def _paced_tier_counts(n: int = 2000) -> dict[str, int]:
 
 def test_lp_assignment_tilts_the_paced_draw_with_a_floor(tmp_path, monkeypatch):
     """P3 (owner 2026-11-27): the LP's split tilts the pacing draw; unassigned families keep the floor."""
+    _no_model_catalog(monkeypatch)
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
     monkeypatch.delenv("ORCH_LOCAL_COMPARATIVE", raising=False)
     monkeypatch.delenv("ORCH_COMPARATIVE_TILT_FLOOR", raising=False)
@@ -533,6 +543,7 @@ def test_lp_assignment_tilts_the_paced_draw_with_a_floor(tmp_path, monkeypatch):
 
 
 def test_tilt_off_when_flag_off_or_route_disabled_or_no_assignment(tmp_path, monkeypatch):
+    _no_model_catalog(monkeypatch)
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
     for setup in ("flag_off", "route_disabled", "no_assignment"):
         monkeypatch.delenv("ORCH_LOCAL_COMPARATIVE", raising=False)
