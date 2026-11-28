@@ -9,7 +9,9 @@ file", and every hourly reconcile failed for a month while interactive runs (1M-
 from __future__ import annotations
 
 import gc
+import json
 import os
+from contextlib import closing
 
 import pytest
 
@@ -60,3 +62,45 @@ def _growth(call) -> int:
 )
 def test_per_row_writers_do_not_hold_open_files(brain, writer):
     assert _growth(writer) <= 2, f"{CALLS} calls left connections open"
+
+
+def test_a_whole_reconcile_holds_no_files_per_row_and_keeps_late_latency(brain):
+    """End to end, including the protected-Cursor latency update: descriptors do not scale with rows."""
+    runs = [f"lane-{i}" for i in range(CALLS)]
+    for run_id in runs:
+        log = brain / f"{run_id}.cursor.log"
+        result = {
+            "type": "result",
+            "result": "Completed",
+            "model": "Composer 2.5",
+            "usage": {"input_tokens": 1000, "output_tokens": 200},
+        }
+        log.write_text(json.dumps(result) + "\n")
+        feedback.record_run(run_id, "example/repo#1", "implement", "cursor")
+        adapters.record_ledger(
+            "cursor",
+            run_id=run_id,
+            log_file=str(log),
+            event="start",
+            cursor_json_output=True,
+            ts=100,
+        )
+    assert ledger_reconcile.reconcile(adapters.LEDGER)["written_cost_rows"] == CALLS
+    for run_id in runs:
+        adapters.record_ledger("cursor", run_id=run_id, event="complete", exit=0, ts=160)
+    gc.collect()
+    gc.disable()
+    try:
+        before = _open_fds()
+        ledger_reconcile.reconcile(adapters.LEDGER)
+        growth = _open_fds() - before
+    finally:
+        gc.enable()
+    # A few once-per-reconcile reads (known runs, cost sources, owner questions) are constant; a
+    # per-row leak is one descriptor per run.
+    assert growth <= 5, f"a reconcile over {CALLS} runs left {growth} files open"
+    with closing(feedback._conn()) as c:
+        latencies = {
+            r[0] for r in c.execute("SELECT latency_s FROM costs WHERE run_id LIKE 'lane-%'")
+        }
+    assert latencies == {60.0}
