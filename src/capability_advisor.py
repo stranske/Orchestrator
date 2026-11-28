@@ -1248,6 +1248,10 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
         "nothing",
     },
     "rail-exercise:readiness": {
+        "review-outcomes": "EXERCISE the review-outcomes value chain over fixture Brain runs: a "
+        "lane-judge pick is acted on only when its route_decision names the review bucket with "
+        "observations after the first relearn that carried grades; an unread Brain stays "
+        "unmeasured. Read-only; never writes outcome rows",
         "opener-core": "EXERCISE the opener core's read-only value-chain adapter over fixture "
         "journals: considered issues stay distinct from started ones, an issue counts as acted on "
         "only once closer-core's rounds carry it, and an unread journal stays unmeasured while an "

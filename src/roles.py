@@ -1537,6 +1537,16 @@ def run_generated_shadow_role(
 # --------------------------------------------------------------------------------------
 # Routing — reuse the deterministic learned router; restrict to a role's eligible backends
 # --------------------------------------------------------------------------------------
+# Roles whose runs are recorded, and graded, under their `route_as` task type rather than
+# `role:<name>`. The lanes' judges call route_role("adjudicator") and then
+# dispatcher.offload(task_type="review"); review_outcomes.py grades those runs, and the weekly
+# relearn folds the grades into the `review` weights. Nothing writes `role:adjudicator` outcomes,
+# so that bucket holds only its seeded priors (0 observations on 2026-11-28), and reading it
+# first meant the grades never reached a judge pick. The other roles' buckets are also empty
+# (2026-11-28), but their runs are not graded under `route_as`, so they keep their own.
+ROLE_WEIGHTS_FROM_ROUTE_AS = frozenset({"adjudicator"})
+
+
 def route_role(
     role_name: str,
     cap: dict | None = None,
@@ -1555,7 +1565,12 @@ def route_role(
     role = get_role(role_name)
     cap = cap if cap is not None else router.load_capacity()
     learned_all = learned if learned is not None else (router.learned_ranks() or {})
-    role_type = feedback.role_task_type(role_name)
+    role_type = (
+        role.route_as
+        if role.name in ROLE_WEIGHTS_FROM_ROUTE_AS
+        else feedback.role_task_type(role_name)
+    )
+    bucket = role_type
     lw = learned_all.get(role_type) if isinstance(learned_all, dict) else None
     if not lw:
         try:
@@ -1574,6 +1589,7 @@ def route_role(
             }
     if not lw and isinstance(learned_all, dict):
         lw = learned_all.get(role.route_as)
+        bucket = role.route_as
     eligible = set(role.eligible_backends)
     if only is not None:
         # Explicit exploration is a restriction, never a way to inject a backend absent from this
@@ -1600,6 +1616,15 @@ def route_role(
             learned=lw,
             exploration_rate=exploration_rate,
         )
+    if pick and pick.get("agent"):
+        # Which learned weights ranked this pick, and how many graded observations the chosen
+        # agent had there. route_decision_record keeps both on the run, so the review-outcomes
+        # value chain can count judge picks drawn from graded weights.
+        pick = {
+            **pick,
+            "learned_bucket": bucket if lw else None,
+            "learned_n_obs": router._learned_n_obs(lw, pick["agent"]),
+        }
     return pick
 
 

@@ -1145,6 +1145,13 @@ PREDICATE_FIXTURES: tuple[dict[str, Any], ...] = (
         "from local implement Brain runs uses the monitor's read-only fixture.",
     },
     {
+        "capability": "review-outcomes",
+        "check": _check_value_chain_monitor,
+        "source": "2026-11-28 campaign P3: the grades never reached a judge pick (route_role read "
+        "the seeded role:adjudicator priors); the monitor's read-only fixture counts a pick as "
+        "acted on only when drawn from graded review weights.",
+    },
+    {
         "capability": "rail-exercise-cadence",
         "check": _check_rail_exercise_cadence,
         "source": "2026-09-03 program item 5 (#207): 49 round-authored contracts, 48 pass / 48 break "

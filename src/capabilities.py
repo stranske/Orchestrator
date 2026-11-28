@@ -2164,6 +2164,35 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
             "invocation and versioned Brain influence-edge paths."
         ),
     },
+    "review-outcomes": {
+        "status": "wired",
+        "entrypoint": "review_outcomes.py:run",
+        "matcher": {"kind": "tick_phase", "equals": "review-outcomes"},
+        "trigger_cadence": "hourly tick, after durability_sweep.py",
+        "output_artifact": "outcomes rows on lane-judge review runs (notes 'review outcome (...)')",
+        "downstream_consumer": (
+            "feedback.py relearn folds the grades into the `review` route weights; "
+            "roles.py:route_role reads that bucket for the adjudicator role the lane judges use "
+            "(ROLE_WEIGHTS_FROM_ROUTE_AS), and the judge run keeps the pick's learned bucket in "
+            "runs.routing_metadata.route_decision"
+        ),
+        "learning_sink": "feedback.py outcomes.adjudicated_verdict on task_type='review' runs",
+        "kill_switch": "ORCH_DISABLE_STEPS=review-outcomes",
+        "rollback": {"restore": "review_outcomes.py restore"},
+        "findability_category": "exercise_bound",
+        "findability_rationale": (
+            "The hourly tick grades lane-judge decisions automatically; `review_outcomes.py probe` "
+            "prints the per-family chain and both pass numbers read-only."
+        ),
+        "notes": (
+            "dedup: grades the closer and opener judges' decisions by what became of the merge or "
+            "issue they judged (Orchestrator#1505, #1513, #1515, #1524). Value-chain row added "
+            "2026-11-28 when the acted-on step was found broken: route_role read the "
+            "`role:adjudicator` bucket (seeded priors, 0 observations) instead of `review`, so no "
+            "grade had reached a judge pick. Demand: lane-judge runs; acted_on: judge picks drawn "
+            "from graded review weights (review_outcomes.value_chain)."
+        ),
+    },
     "value-chain-monitor": {
         "status": "wired",
         "entrypoint": "switch_review.py:review value_chain_monitor.py:report",

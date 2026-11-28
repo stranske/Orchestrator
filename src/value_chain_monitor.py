@@ -39,6 +39,7 @@ from typing import Any
 import capabilities
 import capability_effectiveness
 import feedback
+import review_outcomes
 
 CAPABILITY_ID = "value-chain-monitor"
 WINDOW_DAYS = 90
@@ -102,6 +103,13 @@ SET_ASIDE = (
         "never at this step.",
     ),
     ("outcome", "outcome_open", "open", "acted-on runs with no outcome recorded yet."),
+    (
+        "outcome",
+        "outcome_ungraded",
+        "ungraded",
+        "review-outcomes: acted-on judge runs no rule grades (no decision recorded, or repair, "
+        "evidence or park); counted, never scored.",
+    ),
 )
 # Explicit dependence, not a guess from a capability name or lack of heartbeats.
 INPUT_FLAGS = {
@@ -746,6 +754,7 @@ def _sync_core_situations(inputs: dict[str, Any]) -> int | None:
 ROUTE_WEIGHTS_EXPORT_CAPABILITY = "route-weights-export"
 ROUTE_WEIGHTS_DELEGATION_SOURCES = frozenset({"route_weights", "route_weights_exploration"})
 COMPARATIVE_TILT_CAPABILITY = "comparative-tilt"
+REVIEW_OUTCOMES_CAPABILITY = review_outcomes.CAPABILITY_ID
 
 
 def _route_weights_export_situations(inputs: dict[str, Any]) -> int | None:
@@ -884,6 +893,21 @@ def _comparative_tilt_counts(
     return counts
 
 
+def _review_outcomes_counts(db: Path, since: int, now: int) -> dict[str, Any] | None:
+    """review_outcomes.value_chain over [since, now], read-only; None when the Brain is unreadable."""
+    try:
+        with sqlite3.connect(db.resolve().as_uri() + "?mode=ro", uri=True) as con:
+            return review_outcomes.value_chain(con, since, now)
+    except (sqlite3.Error, OSError, ValueError):
+        return None
+
+
+def _review_outcomes_situations(inputs: dict[str, Any]) -> int | None:
+    """Lane-judge runs in the window (closer and opener judges); None when unread."""
+    chain = inputs.get("review_outcomes")
+    return None if chain is None else chain["demand"]
+
+
 def _comparative_tilt_situations(inputs: dict[str, Any]) -> int | None:
     """Local implement runs whose `routing_metadata.route_decision` exists; None when unread."""
     return _comparative_tilt_counts(inputs.get("comparative_tilt_runs"))["demand"]
@@ -897,6 +921,7 @@ SITUATION_QUERIES: dict[str, Callable[[dict[str, Any]], int | None]] = {
     "sync-core": _sync_core_situations,
     ROUTE_WEIGHTS_EXPORT_CAPABILITY: _route_weights_export_situations,
     COMPARATIVE_TILT_CAPABILITY: _comparative_tilt_situations,
+    REVIEW_OUTCOMES_CAPABILITY: _review_outcomes_situations,
     "role-prompt": _prompt_batches,
     "role-decomposer": _large_issues,
     "role-triage": _open_issues,
@@ -1060,6 +1085,9 @@ def acted_on_index(db: Path, now: int, capability_ids) -> tuple[dict[str, int | 
             index[cid] = _route_weights_export_outcomes(inputs.get("policy_switches"))["acted_on"]
         elif cid == COMPARATIVE_TILT_CAPABILITY:
             index[cid] = _comparative_tilt_counts(inputs.get("comparative_tilt_runs"))["acted_on"]
+        elif cid == REVIEW_OUTCOMES_CAPABILITY:
+            chain = inputs.get("review_outcomes")
+            index[cid] = None if chain is None else chain["acted_on"]
         else:
             index[cid] = int(outcome_counts(cid, own_edges_of(edges, cid))["acted_on"] or 0)
     reason = f"value-chain monitor, {WINDOW_DAYS}d window, {db.name}"
@@ -1111,6 +1139,10 @@ def acted_on_window_index(
                 None if runs is None else [r for r in runs if start <= int(r.get("ts") or 0) <= end]
             )
             index[cid] = _comparative_tilt_counts(bounded_runs)["acted_on"]
+            continue
+        if cid == REVIEW_OUTCOMES_CAPABILITY:
+            chain = _review_outcomes_counts(db, start, end)
+            index[cid] = None if chain is None else chain["acted_on"]
             continue
         own = own_edges_of(edges, cid)
         bounded = [e for e in (own or []) if start <= int(e.get("created_ts") or 0) <= end]
@@ -1215,6 +1247,7 @@ def _brain(db: Path, since: int, now: int) -> dict[str, Any]:
         "edges": None,
         "policy_switches": None,
         "comparative_tilt_runs": None,
+        "review_outcomes": None,
         "errors": [],
     }
     try:
@@ -1289,6 +1322,10 @@ def _brain(db: Path, since: int, now: int) -> dict[str, Any]:
                 ]
             except sqlite3.Error as exc:
                 result["errors"].append(f"comparative-tilt runs unavailable: {exc}")
+            try:
+                result["review_outcomes"] = review_outcomes.value_chain(con, since, now)
+            except sqlite3.Error as exc:
+                result["errors"].append(f"review-outcomes judge runs unavailable: {exc}")
     except (sqlite3.Error, OSError, ValueError) as exc:
         result["errors"].append(f"Brain evidence unavailable: {exc}")
     return result
@@ -1585,6 +1622,21 @@ def report(
             counts["success_scope"] = (
                 "router-chosen local implement starts drawn with the tilt, merged and judged durable"
             )
+        if cid == REVIEW_OUTCOMES_CAPABILITY:
+            chain = inputs.get("review_outcomes")
+            fields = (
+                "invocation_count",
+                "usable",
+                "acted_on",
+                *CLASS_FIELDS.values(),
+                "outcome_success",
+                "outcome_ungraded",
+            )
+            counts.update({f: None if chain is None else chain.get(f, 0) for f in fields})
+            usable_reason = "lane-judge runs unread from Brain"
+            counts["success_scope"] = (
+                "judge runs picked from graded review weights, then graded PASS"
+            )
         if cid == feedback.RELAY_PACING_CAPABILITY:
             relay_usable = _relay_usable(inputs, now - WINDOW_DAYS * 86400, now)
             counts["usable"] = None if relay_usable is None else success_count + relay_usable
@@ -1842,6 +1894,55 @@ def recurrence_fixture() -> bool:
         assert _supervisor_closure_result(enabled, deadline, inputs)["status"] == "deadline_missed"
     unknown = _supervisor_closure_result(enabled, deadline, {"edges": None, "errors": ["unread"]})
     assert unknown["status"] == "unmeasured" and unknown["errors"] == ["unread"]
+    assert _review_outcomes_fixture()
+    return True
+
+
+def _review_outcomes_fixture() -> bool:
+    """review-outcomes: a judge pick counts as acted on only when drawn from graded review weights."""
+    ro = review_outcomes
+    caller = ro._caller(ro.closer_state())
+    relearn = ro.PASS_SINCE + 100
+
+    def meta(bucket: str, n_obs: int) -> str:
+        return json.dumps({"route_decision": {"learned_bucket": bucket, "learned_n_obs": n_obs}})
+
+    with sqlite3.connect(":memory:") as con:
+        con.executescript(
+            "CREATE TABLE runs(run_id, ts, task_type, target, routing_metadata);"
+            "CREATE TABLE review_decisions(run_id, producer, decision);"
+            "CREATE TABLE outcomes(run_id, notes, adjudicated_verdict);"
+            "CREATE TABLE route_weights(ts);"
+        )
+        # Before any relearn carried grades, nothing is acted on and the pass reads 0.
+        assert ro.graded_weights_since(con) is None
+        con.execute("INSERT INTO route_weights VALUES (?)", (relearn,))
+        rows = [
+            ("a", relearn - 1, meta("review", 5), "close", "PASS"),  # before the relearn
+            ("b", relearn + 1, meta("review", 5), "close", "PASS"),  # acted on, graded PASS
+            ("c", relearn + 2, meta("review", 5), "close", None),  # acted on, awaiting the sweep
+            ("d", relearn + 3, meta("review", 0), "close", "PASS"),  # chosen agent had no grades
+            ("e", relearn + 4, meta("role:adjudicator", 5), "repair", None),  # wrong bucket
+            ("f", relearn + 5, meta("review", 5), "repair", None),  # acted on, no rule
+        ]
+        for run_id, ts, routing, decision, verdict in rows:
+            con.execute(
+                "INSERT INTO runs VALUES (?,?,?,?,?)", (run_id, ts, "review", caller, routing)
+            )
+            con.execute(
+                "INSERT INTO review_decisions VALUES (?,?,?)", (run_id, ro.PRODUCER, decision)
+            )
+            if verdict:
+                con.execute(
+                    "INSERT INTO outcomes VALUES (?,?,?)", (run_id, ro.NOTE_PREFIX, verdict)
+                )
+        chain = ro.value_chain(con, 0, relearn + 10)
+        assert (chain["demand"], chain["invocation_count"], chain["usable"]) == (6, 6, 3), chain
+        assert (chain["acted_on"], chain["outcome"], chain["outcome_success"]) == (3, 1, 1), chain
+        assert (chain["outcome_awaiting_sweep"], chain["outcome_ungraded"]) == (1, 1), chain
+        assert ro.acted_pass(con, relearn + 10)["value"] == 3
+    assert situation_count(REVIEW_OUTCOMES_CAPABILITY, {"review_outcomes": chain}) == 6
+    assert situation_count(REVIEW_OUTCOMES_CAPABILITY, {}) is None
     return True
 
 
