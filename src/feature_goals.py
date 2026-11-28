@@ -128,11 +128,15 @@ def closer_campaign_completion(now: int) -> Measurement:
     except (OSError, ValueError, TypeError, KeyError, RuntimeError) as exc:
         return unknown(now, f"native closer-core completion unavailable: {str(exc)[:240]}")
     value = float(stamp >= now - GOAL_SILENCE_DAYS * DAY)
+    # The reading is taken now: ``measure`` discards any as_of older than a day,
+    # so stamping the completion time made the measurement stale 24 hours after
+    # the canary completed. The completion time stays the inactivity start.
     return Measurement(
         value,
         "native worker + guarded publication + pinned runtime acceptance",
-        stamp,
-        reason=f"registered CSV canary: {record['publication_url']}",
+        now,
+        reason=f"registered CSV canary completed_at {stamp}: {record['publication_url']}",
+        inactive_since=stamp if value == 0.0 else None,
     )
 
 
