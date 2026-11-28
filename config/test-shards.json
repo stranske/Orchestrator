@@ -67,6 +67,8 @@
     "tests/test_runtime_ac_pr_body_spec.py",
     "tests/test_switch_review_stuck_targets.py",
     "tests/test_router_comparative.py",
+    "tests/test_adjudicator_route_weights.py",
+    "tests/test_review_outcomes_value_chain.py",
     "tests/test_gemini_pacing_source.py",
     "tests/test_switch_review_unowned_prs.py"
   ],
@@ -317,6 +319,8 @@
       "tests/test_experiment_reservation.py",
       "tests/test_gemini_full_split.py",
       "tests/test_router_comparative.py",
+      "tests/test_adjudicator_route_weights.py",
+      "tests/test_review_outcomes_value_chain.py",
       "tests/test_codex_subagent_setting.py"
     ],
     [

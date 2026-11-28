@@ -805,6 +805,18 @@ best backend *per role* the same way they learn the best implementer per task_ty
 accepted downstream outcomes, `route_role()` prefers learned weights for `role:<name>` and falls back to
 `route_as` only while that role-specific surface is cold.
 
+**That fallback never fired (found 2026-11-28).** The weekly relearn seeds a `role:<name>` row set from
+the `route_as` priors, so every role bucket exists, and `route_role()` treated seeded priors as learned
+weights: all five roles routed on their priors (0 observations each on 2026-11-28). For the
+adjudicator that discarded real evidence: the closer and opener judges call `route_role("adjudicator")`
+and record their offloads as `task_type='review'`, `review_outcomes.py` grades those runs, and relearn
+folds the grades into `review` (codex n=433, gemini n=121, claude n=104 on a Brain copy). So
+`ROLE_WEIGHTS_FROM_ROUTE_AS = {"adjudicator"}` reads `route_as` for that role. Every role pick now
+carries `learned_bucket` and the chosen agent's `learned_n_obs`, and `router.route_decision_record`
+keeps them on the run, so a judge pick drawn from graded weights is countable. The other four roles
+keep their own bucket: their runs are not graded under `route_as`, and switching them would route,
+for example, the prompt role on implement weights. That is a separate decision.
+
 | role | replaces / upgrades | judgment it adds | status |
 |---|---|---|---|
 | **RedirectAgent** | `redirect_policy` heuristics | read log+diff+AC → action + corrected prompt | **built, shadow (2026-06-19)** |
@@ -1161,6 +1173,17 @@ issue's own fate with the follow-up rule (a closer `close` on such a PR is count
 `review_outcomes.py probe` prints the chain per family for both judges, one line per graded rule, and the pass number (graded
 closer-judge outcomes on runs made after the first deploy). Kill switch `ORCH_DISABLE_STEPS=review-outcomes`; rollback `review_outcomes.py
 restore` deletes only its own rows (notes prefix). The loop diagram gains one feedback chip.
+
+**Value-chain row `review-outcomes` (2026-11-28).** It is declared in `capabilities.KNOWN_DECLARATIONS`,
+and `review_outcomes.value_chain` is the one computation that the monitor row, `acted_on_index` and the probe
+read. Demand is lane-judge runs (both judges' offloads); invocation is those with a recorded decision;
+usable is graded PASS/FAIL; acted_on is a lane-judge pick whose `route_decision` names `learned_bucket
+= review` with `learned_n_obs > 0`, made after the first relearn that carried grades (the first
+`route_weights` version written after `PASS_SINCE`); outcome is those picks graded since, success PASS.
+Set beside outcome: `excl`, `sweep` (a graded kind not labelled yet) and `ungraded` (no decision, or
+repair/evidence/park). Before this row existed the grades had no acted-on step at all, which is how the
+`role:adjudicator` break went unseen. The build pass number is printed by the probe as `judge picks
+from graded weights N / 20`; it waits on the weekly relearn, which runs while it is closed.
 
 A third, coarser feedback surface re-keys pattern mining to the fleet rather than to this tool's own
 completion events (which require a research-subject identity the fleet's work never carries, so the

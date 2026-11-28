@@ -730,17 +730,22 @@ def _pacing_choice(scored, cap, learned, rng, tilt=None):
 
 def route_decision_record(pick: dict | None) -> dict | None:
     """The compact, JSON-safe part of a select_agent pick that a run record keeps: who was chosen, how
-    (route_source, pacing policy) and the comparative tilt with its per-candidate weights. None when the
-    pick carries no pacing decision (nothing was drawn, so there is no decision to grade)."""
+    (route_source, pacing policy), the comparative tilt with its per-candidate weights and, for a role
+    pick, the learned bucket that ranked it. None when the pick carries none of these (nothing was
+    drawn or ranked, so there is no decision to grade)."""
     if not pick or not pick.get("agent"):
         return None
     decision = pick.get("pacing_decision") or {}
-    if not decision and not pick.get("muse_ladder"):
+    # A role pick (roles.route_role) names the learned weights that ranked it; that is a decision
+    # to grade even without a pacing draw (the review-outcomes chain counts judge picks by it).
+    learned = {k: pick[k] for k in ("learned_bucket", "learned_n_obs") if k in pick}
+    if not decision and not pick.get("muse_ladder") and not learned:
         return None
     record = {
         "chosen": pick["agent"],
         "route_source": pick.get("route_source"),
         "policy": decision.get("policy"),
+        **learned,
     }
     if decision.get("comparative_tilt"):
         record["comparative_tilt"] = decision["comparative_tilt"]

@@ -126,6 +126,108 @@ PASS_OUTCOMES = 100
 PASS_SINCE = 1795759838
 
 
+# The capability's value chain (value_chain_monitor row `review-outcomes`, 2026-11-28). The grades
+# are acted on when a lane judge is picked from the learned weights that carry them: the weekly
+# relearn folds them into the `review` bucket, and roles.route_role reads that bucket for the
+# adjudicator (roles.ROLE_WEIGHTS_FROM_ROUTE_AS). The judge run records the bucket and the chosen
+# agent's observations in routing_metadata.route_decision.
+CAPABILITY_ID = "review-outcomes"
+ROUTE_BUCKET = "review"
+# Build pass number (2026-11-28): this many lane-judge picks drawn from weights that carry grades.
+ACTED_PASS = 20
+
+
+def graded_weights_since(con) -> int | None:
+    """When the learned weights first carried the grades: the first relearn written after
+    PASS_SINCE. Every grade was written after PASS_SINCE and the relearn window covers it, so that
+    version and every later one count them. None until the weekly relearn has run once."""
+    row = con.execute("SELECT MIN(ts) FROM route_weights WHERE ts > ?", (PASS_SINCE,)).fetchone()
+    return int(row[0]) if row and row[0] is not None else None
+
+
+def _drawn_from_grades(raw, ts: int, weights_since: int | None) -> bool:
+    if weights_since is None or ts < weights_since:
+        return False
+    try:
+        decision = (json.loads(raw) if isinstance(raw, str) else raw or {}).get("route_decision")
+    except (ValueError, TypeError, AttributeError):
+        return False
+    return (
+        isinstance(decision, dict)
+        and decision.get("learned_bucket") == ROUTE_BUCKET
+        and int(decision.get("learned_n_obs") or 0) > 0
+    )
+
+
+def value_chain(con, since: int, now: int) -> dict:
+    """The value chain over lane-judge runs in [since, now], from the Brain alone.
+
+    demand: lane-judge runs (closer and opener judges' offloads). invocation: those with a recorded
+    decision. usable: those graded PASS/FAIL. acted_on: judge picks drawn from the graded weights
+    (bucket `review`, chosen agent with observations, after the first relearn that carried grades).
+    outcome: acted-on runs graded since, success: PASS. Set beside outcome: excluded (graded into an
+    excluded class), awaiting the sweep (a graded decision kind not labelled yet) and ungraded (no
+    decision, or a decision with no outcome rule)."""
+    callers = (_caller(closer_state()), _caller(opener_state()))
+    prefixes = tuple(NOTE_PREFIXES.values())
+    weights_since = graded_weights_since(con)
+    n: Counter[str] = Counter()
+    for ts, producer, decision, notes, verdict, meta in con.execute(
+        "SELECT r.ts, d.producer, d.decision, o.notes, o.adjudicated_verdict, r.routing_metadata "
+        "FROM runs r LEFT JOIN review_decisions d ON d.run_id=r.run_id "
+        "LEFT JOIN outcomes o ON o.run_id=r.run_id "
+        "WHERE r.task_type='review' AND r.target IN (?,?) AND r.ts BETWEEN ? AND ?",
+        (*callers, since, now),
+    ):
+        n["demand"] += 1
+        n["invocation_count"] += decision is not None
+        ours = str(notes or "").startswith(prefixes)
+        graded = ours and bool(verdict)
+        n["usable"] += graded
+        if not _drawn_from_grades(meta, int(ts), weights_since):
+            continue
+        n["acted_on"] += 1
+        if graded:
+            n["outcome"] += 1
+            n["outcome_success"] += verdict == "PASS"
+        elif ours:
+            n["outcome_excluded"] += 1
+        elif decision in GRADED.get(producer, ()):
+            n["outcome_awaiting_sweep"] += 1
+        else:
+            n["outcome_ungraded"] += 1
+    fields = (
+        "demand",
+        "invocation_count",
+        "usable",
+        "acted_on",
+        "outcome",
+        "outcome_success",
+        "outcome_excluded",
+        "outcome_awaiting_sweep",
+        "outcome_ungraded",
+    )
+    return {
+        **{f: n[f] for f in fields},
+        "outcome_open": 0,
+        "outcome_no_merge": 0,
+        "graded_weights_since": weights_since,
+    }
+
+
+def acted_pass(con, now: int) -> dict:
+    """Build pass number: lane-judge picks drawn from graded weights since they first carried them."""
+    since = graded_weights_since(con)
+    value = 0 if since is None else value_chain(con, since, now)["acted_on"]
+    return {
+        "measure": "lane-judge picks drawn from graded review weights",
+        "value": value,
+        "pass_at": ACTED_PASS,
+        "passed": value >= ACTED_PASS,
+        "since": since,
+    }
+
+
 def closer_state() -> Path:
     return Path(
         os.environ.get("CLOSER_CORE_STATE", Path.home() / ".codex" / "orchestrator" / "closer-core")
@@ -877,7 +979,9 @@ def probe(since: int | None = None) -> dict:
         families, totals = _chain(c, PRODUCER, closer_state(), since)
         opener_families, opener_totals = _chain(c, OPENER, opener_state(), since)
         post = totals["post_deploy_outcome"]
+        acted = acted_pass(c, int(time.time()))
         return {
+            "acted_pass": acted,
             "since": since,
             "families": families,
             "totals": dict(totals),
@@ -937,6 +1041,17 @@ def format_probe(result: dict) -> str:
         f"post-deploy outcomes {pn['value']} / {pn['pass_at']} ({'PASS' if pn['passed'] else 'not yet'}; "
         f"runs since {time.strftime('%Y-%m-%dT%H:%MZ', time.gmtime(result['since']))})"
     )
+    acted = result.get("acted_pass")
+    if acted:
+        when = (
+            "awaiting the first weekly relearn after grading began"
+            if acted["since"] is None
+            else "since " + time.strftime("%Y-%m-%dT%H:%MZ", time.gmtime(acted["since"]))
+        )
+        lines.append(
+            f"judge picks from graded weights {acted['value']} / {acted['pass_at']} "
+            f"({'PASS' if acted['passed'] else 'not yet'}; {when})"
+        )
     return "\n".join(lines)
 
 
@@ -952,6 +1067,8 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     if args.cmd == "run":
         out = run()
+        # The hourly tick ran the grader (capability ledger evidence; never raises).
+        feedback._capability_daily_heartbeat("review-outcomes", "invocation", ref="tick")
         if args.json:
             print(json.dumps(out, sort_keys=True))
         else:
