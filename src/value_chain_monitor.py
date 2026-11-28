@@ -1456,14 +1456,23 @@ def report(
     path: Path | None = None,
     env: Mapping[str, str] | None = None,
     inputs: dict[str, Any] | None = None,
+    include_expired: bool = False,
 ) -> dict:
+    """`include_expired` also measures rows retired BY THEIR EXPIRY (marked `retired_by_expiry`): the
+    evidence that can bring a timed-out row back must stay readable after the timeout
+    (capabilities.auto_renew_on_outcomes)."""
     now = int(time.time()) if now is None else now
     inputs = inputs or {}
     env = os.environ if env is None else env
     ledger = capabilities.load_declared(path or capabilities.REG)
     rows = []
     for cid, cap in sorted(ledger.items()):
-        if cap.get("status") in capabilities.NOT_LIVE_STATES:
+        retired_by_expiry = (
+            include_expired
+            and cap.get("status") == "retired"
+            and capabilities.expiry_retirement(cap) is not None
+        )
+        if cap.get("status") in capabilities.NOT_LIVE_STATES and not retired_by_expiry:
             continue
         events = [
             e
@@ -1619,6 +1628,8 @@ def report(
         off = [flag for flag in sorted(dependencies) if _flag_is_off(flag, env.get(flag))]
         counts["input_off"] = ["input_off:" + flag for flag in off]
         counts["first_break"] = first_break(counts)
+        if retired_by_expiry:
+            counts["retired_by_expiry"] = True
         rows.append(counts)
     return {
         "generated_at": now,

@@ -22,7 +22,7 @@ import sqlite3
 import tempfile
 import time
 from collections import OrderedDict
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -233,7 +233,12 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
         "output_artifact": "$ORCH_STATE_DIR/route-weights-export.json",
         "downstream_consumer": "route_weights_export.py:publish_document hands the document to the Workflows config repository",
         "learning_sink": "feedback.py agent_switches rows (source='policy', delegation_source in route_weights/route_weights_exploration) and their PR durability outcomes",
-        "gate_reason": "write-only shadow export; remote publication requires --publish and ORCH_ROUTE_WEIGHTS_PUBLISH=1",
+        "gate_reason": (
+            "remote publication requires ORCH_ROUTE_WEIGHTS_PUBLISH=1, which is ON since the owner's "
+            "2026-09-21 decision (~/.bash_profile): the tick publishes hourly to exports/route-weights "
+            "when the artifact changes, and the local router consumes the export live (comparative "
+            "rank and tilt, 2026-11-27)"
+        ),
         "gate_evidence": "latest-version, thresholded fixture export preserves reserve-seat separation",
         "evidence_threshold": "each public ranking row has n_obs >= min_observations",
         "kill_switch": "ORCH_DISABLE_STEPS=route-weights-export",
@@ -241,7 +246,10 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
         "notes": (
             "dedup: checked feedback.py route-weights CLI/report, exploration_review.py, and "
             ".github/scripts/orchestrator_skill.py; local reports and skill-context export exist "
-            "but no route-weights export/publish artifact is present"
+            "but no route-weights export/publish artifact is present. 2026-11-28: no longer a "
+            "write-only shadow: published on cadence since 2026-09-21 and consumed by the hosted "
+            "policy and the local router; value-chain row 'works' (outcome 93, success 81). Held by "
+            "auto-renew on outcomes, not by hand renewal."
         ),
     },
     "comparative-tilt": {
@@ -1851,6 +1859,108 @@ def renew(
             "expires_on": utc_date(expiry),
             "evidence_refs": refs,
         }
+
+
+AUTO_RENEW_SWITCH = "ORCH_CAPABILITY_AUTO_RENEW"
+AUTO_RENEW_REASON = "auto-renewed on outcomes (owner decision 2026-11-28)"
+
+
+def outcome_evidence_ref(row: Mapping[str, Any]) -> str:
+    """The value-chain monitor row quoted as the renewal's evidence: what it rests on, in its own words."""
+    return (
+        f"value-chain-monitor:{row.get('capability')} demand {row.get('situation_count')}; "
+        f"invocation {row.get('invocation_count')}; usable {row.get('usable')}; "
+        f"acted_on {row.get('acted_on')}; outcome {row.get('outcome')}; "
+        f"success {row.get('outcome_success')}; first_break {row.get('first_break')}"
+    )
+
+
+def auto_renew_on_outcomes(
+    value_chain_rows: Sequence[Mapping[str, Any]],
+    *,
+    now: int,
+    horizon_days: int,
+    path: Path = REG,
+    env: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """Renew every row that DELIVERS, through `renew`, so a producing capability never needs a hand renewal
+    (owner decision 2026-11-28, "Auto-renew on outcomes").
+
+    Every ledger row carries an expiry by design (GATED_TTL_DAYS from registration or renewal), and the
+    expiry is the moment a row must show it still earns its place. The evidence the owner chose is the
+    value-chain monitor's `outcome_success` over its trailing window: a row with success > 0 is held for
+    another GATED_TTL_DAYS with the monitor row quoted as its evidence ref. A row with no outcome is left
+    alone and expires on schedule, so this widens nothing for rows that do not deliver. Due means: live
+    and within `horizon_days` of its expiry, or already retired BY its expiry (renew restores it).
+
+    Gate contract (latched-gate check): what clears an expiring row is its own outcomes, which the monitor
+    reads whether the row is live or retired-by-expiry (`value_chain_monitor.report(include_expired=True)`),
+    so retirement never hides the evidence that would bring it back; the population measured (outcomes in
+    the monitor's window) is the one renewal acts on; fully drained prints `renewed 0; refused 0; ...;
+    delivering inside the notice window 0`. Kill switch: ORCH_CAPABILITY_AUTO_RENEW=0 (FYI-only again).
+    """
+    env = os.environ if env is None else env
+    out: dict[str, Any] = {
+        "enabled": str(env.get(AUTO_RENEW_SWITCH, "1")).strip().lower()
+        not in {"0", "false", "no", "off"},
+        "horizon_days": horizon_days,
+        "renewed": [],
+        "refused": [],
+        "no_outcome": [],
+    }
+    rows = {str(r.get("capability")): r for r in value_chain_rows if r.get("capability")}
+    ledger = load_declared(path)
+    for cid, cap in sorted(ledger.items()):
+        expiry = cap.get("expiry")
+        if expiry is None:
+            continue
+        live = cap.get("status") not in NOT_LIVE_STATES
+        lapsed = cap.get("status") == "retired" and expiry_retirement(cap) is not None
+        if not ((live and int(expiry) - now <= horizon_days * 86400) or lapsed):
+            continue
+        row = rows.get(cid)
+        success = row.get("outcome_success") if row else None
+        if type(success) is not int or success <= 0:
+            out["no_outcome"].append(
+                {
+                    "capability_id": cid,
+                    "success": success,
+                    "first_break": (row or {}).get("first_break", "no monitor row"),
+                    "expires_on": utc_date(int(expiry)),
+                }
+            )
+            continue
+        if not out["enabled"]:
+            out["refused"].append({"capability_id": cid, "reason": f"{AUTO_RENEW_SWITCH}=0"})
+            continue
+        try:
+            done = renew(
+                cid,
+                reason=(
+                    f"{AUTO_RENEW_REASON}: value-chain success {success} > 0 in the monitor's "
+                    "trailing window"
+                ),
+                evidence_refs=[outcome_evidence_ref(row or {})],
+                path=path,
+                timestamp=now,
+                acting=(
+                    (row or {}).get("acted_on")
+                    if type((row or {}).get("acted_on")) is int
+                    else None
+                ),
+            )
+        except ValueError as exc:
+            out["refused"].append({"capability_id": cid, "reason": str(exc)[:300]})
+            continue
+        out["renewed"].append({**done, "success": success})
+    out["delivering_inside_window"] = len(out["refused"])
+    out["line"] = (
+        f"auto-renew on outcomes: renewed {len(out['renewed'])}; refused {len(out['refused'])}; "
+        f"no outcome {len(out['no_outcome'])} (expire on schedule); delivering inside the "
+        f"{horizon_days}d notice window and not renewed {out['delivering_inside_window']}"
+        + ("" if out["enabled"] else f" ({AUTO_RENEW_SWITCH}=0)")
+    )
+    return out
 
 
 # The fields a DECLARATION owns. Reconciliation rewrites these from code on every load, so a value
