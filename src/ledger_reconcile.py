@@ -23,6 +23,7 @@ import sys
 import tempfile
 import time
 from collections import defaultdict
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -101,7 +102,7 @@ def _settle_provider_limit_death(run_id: str, evidence: dict, *, dry_run: bool) 
     some learner still scores, recorded as not merged, for a run started under this rule, is
     written; everything else is left exactly as recorded and counted under its reason.
     """
-    with feedback._conn() as c:
+    with closing(feedback._conn()) as c, c:  # closed per call: see feedback.record_cost
         row = c.execute(
             "SELECT r.ts, o.run_id, o.merged, o.failure_class FROM runs r "
             "LEFT JOIN outcomes o ON o.run_id=r.run_id WHERE r.run_id=?",
@@ -678,7 +679,7 @@ def _profile_id_from_attempt(run_id: str) -> str | None:
     created. Reading it there needs no dispatcher change AND works retroactively on attempts already
     on record, which a new ledger field could never do.
     """
-    with feedback._conn() as c:
+    with closing(feedback._conn()) as c, c:
         row = c.execute(
             "SELECT profile_id FROM execution_attempts WHERE run_id=? AND operation_role='worker' "
             "AND profile_id IS NOT NULL AND resolved_model IS NULL "
@@ -1155,7 +1156,7 @@ def reconcile(
                 infra_classified += 1
         if protected_cursor_cost:
             if not dry_run and latency_s > 0:
-                with feedback._conn() as c:
+                with closing(feedback._conn()) as c, c:
                     updated = c.execute(
                         "UPDATE costs SET latency_s=? WHERE run_id=? AND source IN (?,?,?) "
                         "AND COALESCE(latency_s,0) < ?",
