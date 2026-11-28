@@ -352,11 +352,16 @@ def _classify_run_log_segment(
     return evidence_result
 
 
-_HEADER_CWD = re.compile(r"\bcwd=(\S+)")
+# The workspace path is written unescaped and may contain spaces: capture up to the next header field.
+_HEADER_CWD = re.compile(r"\bcwd=(.*?)(?= process_cwd=| run_id=| ===\s*$|$)")
 
 
 def _vibe_run_cost(
-    run_rows: list[dict], log_file: Path | None, run_id: str, writers: set[str] | None
+    run_rows: list[dict],
+    log_file: Path | None,
+    run_id: str,
+    writers: set[str] | None,
+    errors: list[str] | None = None,
 ) -> tuple[int, int, float, str] | None:
     """A Vibe run's tokens and dollars from Vibe's session record, joined by the run header's `cwd=`
     and the run's start/complete window (adapters.vibe_session_cost)."""
@@ -364,7 +369,9 @@ def _vibe_run_cost(
         return None
     try:
         lines = log_file.read_text(errors="replace").splitlines()
-    except OSError:
+    except OSError as exc:
+        if errors is not None:
+            errors.append(f"{log_file}: {type(exc).__name__}: {exc}"[:240])
         return None
     headers = [line for line in lines if line.startswith("=== ")]
     # A shared per-target log names the run in its header; a dedicated offload log has one header.
@@ -376,9 +383,11 @@ def _vibe_run_cost(
     starts = [int(_number(r.get("started_ts") or r.get("ts")) or 0) for r in run_rows]
     starts = [t for t in starts if t]
     ends = [int(_number(r.get("ts")) or 0) for r in run_rows if r.get("event") == "complete"]
-    if not cwd or not starts:
+    # Priced only once the run is terminal: a pass during a live session would freeze a partial cost
+    # behind the protected `vibe-session` source. Until then the run stays unpriced and is re-read.
+    if not cwd or not starts or not ends:
         return None
-    return adapters.vibe_session_cost(cwd, min(starts), max(ends) if ends else None)
+    return adapters.vibe_session_cost(cwd.strip(), min(starts), max(ends), errors)
 
 
 def _log_usage(path: Path | None, run_id: str, writers: set[str] | None = None) -> tuple[int, int]:
@@ -893,6 +902,7 @@ def reconcile(
     rows, errors = _read_ledger(path)
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     skipped: dict[str, int] = defaultdict(int)
+    vibe_errors_seen: set[str] = set()  # each unreadable session file reported once per pass
     for row in rows:
         run_id = row.get("run_id")
         if not isinstance(run_id, str) or not run_id.strip():
@@ -1055,7 +1065,17 @@ def reconcile(
             if log_cost > cost_usd:  # 16(j): the agent's own reported dollars beat ledger zeros
                 cost_usd = log_cost
                 log_costs_harvested += 1
-            vibe = _vibe_run_cost(run_rows, log_file, run_id, writers)
+            vibe_errors: list[str] = []
+            vibe = _vibe_run_cost(run_rows, log_file, run_id, writers, vibe_errors)
+            fresh = [m for m in dict.fromkeys(vibe_errors) if m not in vibe_errors_seen]
+            if fresh:
+                vibe_errors_seen.update(fresh)
+                skipped["vibe_session_unreadable"] += len(fresh)
+                for message in fresh[:3]:
+                    print(
+                        f"ledger_reconcile: vibe pricing evidence unreadable: {message}",
+                        file=sys.stderr,
+                    )
             if vibe is not None:  # Vibe's own session record (P3 gap C, 2026-11-27)
                 tokens_in, tokens_out, cost_usd, source = vibe
                 log_costs_harvested += 1

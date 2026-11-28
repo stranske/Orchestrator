@@ -134,3 +134,54 @@ def test_vibe_enters_the_solve_cost_only_with_enough_priced_runs(brain):
     assert included["inputs"]["cost_source_by_agent"]["vibe"]["source"] == (
         adapters.VIBE_SESSION_COST_SOURCE
     )
+
+
+def _runtime():
+    return adapters.AGENT_RUNTIME / "vibe" / ".vibe" / "logs" / "session"
+
+
+def test_adjacent_runs_in_one_workspace_never_share_a_session(brain, tmp_path):
+    ws = tmp_path / "w"
+    ws.mkdir()
+    base = adapters._iso_to_epoch("2027-01-15T08:00:00+00:00")
+    _session(_runtime(), "b", ws, "2027-01-15T08:01:45+00:00", 100, 10, 1.0)  # starts at base+105
+    assert adapters.vibe_session_cost(str(ws), base, base + 60) is None  # run A: 0..60
+    assert adapters.vibe_session_cost(str(ws), base + 100, base + 160)[2] == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+def test_a_non_finite_session_cost_is_not_a_price(brain, tmp_path, bad):
+    ws = tmp_path / "w"
+    ws.mkdir()
+    _session(_runtime(), "a", ws, "2027-01-15T08:00:10+00:00", 100, 10, bad)
+    start = adapters._iso_to_epoch("2027-01-15T08:00:00+00:00")
+    assert adapters.vibe_session_cost(str(ws), start, start + 60) is None
+
+
+def test_malformed_session_files_are_reported_not_raised(brain, tmp_path):
+    ws = tmp_path / "w"
+    ws.mkdir()
+    for name, body in (("list", "[]"), ("env", '{"environment": "x"}'), ("broken", "{not json")):
+        d = _runtime() / name
+        d.mkdir(parents=True)
+        (d / "meta.json").write_text(body)
+    _session(_runtime(), "ok", ws, "2027-01-15T08:00:10+00:00", 100, 10, 2.0)
+    start = adapters._iso_to_epoch("2027-01-15T08:00:00+00:00")
+    errors: list[str] = []
+    assert adapters.vibe_session_cost(str(ws), start, start + 60, errors)[2] == pytest.approx(2.0)
+    assert len(errors) == 3 and all("meta.json" in e for e in errors)
+
+
+def test_header_cwd_keeps_spaces_and_an_unfinished_run_is_not_priced(brain, tmp_path):
+    ws = tmp_path / "work space"
+    ws.mkdir()
+    start = int(time.time()) - 60
+    iso = datetime.fromtimestamp(start + 5, tz=timezone.utc).isoformat()
+    _session(_runtime(), "a", ws, iso, 50, 5, 0.75)
+    log = tmp_path / "offload.vibe.9.log"
+    stamp = datetime.fromtimestamp(start, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    log.write_text(f"=== {stamp} offload vibe/mid cwd={ws} process_cwd={ws} ===\nworking\n")
+    rows = [{"agent": "vibe", "event": "start", "started_ts": start, "ts": start}]
+    assert ledger_reconcile._vibe_run_cost(rows, log, "r9", None) is None  # no complete row yet
+    rows.append({"agent": "vibe", "event": "complete", "started_ts": start, "ts": start + 30})
+    assert ledger_reconcile._vibe_run_cost(rows, log, "r9", None)[2] == pytest.approx(0.75)

@@ -18,6 +18,7 @@ from __future__ import annotations
 import errno
 import hashlib
 import json
+import math
 import os
 import re
 import shlex
@@ -605,8 +606,10 @@ def cursor_result_cost(
 
 
 VIBE_SESSION_COST_SOURCE = "vibe-session"
-# Slack around a run's start/end when joining Vibe's own session record to it.
-VIBE_SESSION_JOIN_SLACK_S = 120
+# A session belongs to the run whose span contains its start. The span is the run's own start/complete
+# bounds plus this much clock slack: claims keep two runs out of one workspace at a time, so adjacent
+# runs in a workspace never share a session (a wider window let one session price two runs).
+VIBE_SESSION_JOIN_SLACK_S = 5
 
 
 def vibe_session_dirs() -> list[Path]:
@@ -616,47 +619,81 @@ def vibe_session_dirs() -> list[Path]:
     return list(dict.fromkeys(dirs))
 
 
-def vibe_session_cost(
-    workspace: str, started_ts: int, ended_ts: int | None = None
-) -> tuple[int, int, float, str] | None:
-    """Tokens and dollars from Vibe's own session record(s) for a run (owner 2026-11-27, P3 gap C).
+_VIBE_INDEX: dict[str, tuple[tuple, list[tuple[str, int, Any, Any, Any]], list[str]]] = {}
 
-    Vibe's plan is a dollar budget spent at Mistral API rates ("Vibe budget exhausted", HTTP 402), and the
-    CLI writes `stats.session_cost` / `session_prompt_tokens` / `session_completion_tokens` per session in
-    the same units. Joined by `environment.working_directory` and `start_time` inside the run's window;
-    every matching session is summed (a run may restart its session). None when nothing matches or the
-    matched sessions did no work (0 tokens: a refused or empty run is not a price observation)."""
-    target = str(Path(workspace).expanduser().resolve())
-    end = (ended_ts if ended_ts is not None else started_ts) + VIBE_SESSION_JOIN_SLACK_S
-    begin = started_ts - VIBE_SESSION_JOIN_SLACK_S
-    tokens_in = tokens_out = 0
-    cost = 0.0
-    matched = False
-    for directory in vibe_session_dirs():
-        for meta_path in directory.glob("*/meta.json"):
-            try:
-                meta = json.loads(meta_path.read_text(errors="ignore") or "{}")
-            except (OSError, json.JSONDecodeError):
-                continue
-            env = meta.get("environment") or {}
-            if str(env.get("working_directory") or "") != target:
-                continue
-            stamp = _iso_to_epoch(meta.get("start_time"))
-            if not stamp or not begin <= stamp <= end:
-                continue
-            stats = meta.get("stats") or {}
-            tin, tout, usd = (
+
+def _vibe_session_index(directory: Path) -> tuple[list[tuple[str, int, Any, Any, Any]], list[str]]:
+    """(working_directory, start_epoch, prompt_tokens, completion_tokens, cost) per session in
+    `directory`, read once per directory state (reconcile prices every Vibe run from one index instead of
+    re-reading ~1,300 files per run). Malformed files are listed as errors, never raised."""
+    try:
+        stat = directory.stat()
+        key = (stat.st_mtime_ns, stat.st_ino)
+    except OSError:
+        return [], []
+    cached = _VIBE_INDEX.get(str(directory))
+    if cached and cached[0] == key:
+        return cached[1], cached[2]
+    rows: list[tuple[str, int, Any, Any, Any]] = []
+    errors: list[str] = []
+    for meta_path in directory.glob("*/meta.json"):
+        try:
+            meta = json.loads(meta_path.read_text(errors="ignore") or "{}")
+        except (OSError, json.JSONDecodeError) as exc:
+            errors.append(f"{meta_path}: {type(exc).__name__}: {exc}"[:240])
+            continue
+        env = meta.get("environment") if isinstance(meta, dict) else None
+        stats = meta.get("stats") if isinstance(meta, dict) else None
+        if not isinstance(env, dict) or not isinstance(stats, dict):
+            errors.append(f"{meta_path}: environment or stats is not an object")
+            continue
+        stamp = _iso_to_epoch(meta.get("start_time"))
+        if not stamp:
+            continue
+        rows.append(
+            (
+                str(env.get("working_directory") or ""),
+                stamp,
                 stats.get("session_prompt_tokens"),
                 stats.get("session_completion_tokens"),
                 stats.get("session_cost"),
             )
+        )
+    _VIBE_INDEX[str(directory)] = (key, rows, errors)
+    return rows, errors
+
+
+def vibe_session_cost(
+    workspace: str, started_ts: int, ended_ts: int, errors: list[str] | None = None
+) -> tuple[int, int, float, str] | None:
+    """Tokens and dollars from Vibe's own session record(s) for a FINISHED run (owner 2026-11-27, P3 gap C).
+
+    Vibe's plan is a dollar budget spent at Mistral API rates ("Vibe budget exhausted", HTTP 402), and the
+    CLI writes `stats.session_cost` / `session_prompt_tokens` / `session_completion_tokens` per session in
+    the same units. A session is this run's when its `environment.working_directory` is the run's
+    workspace and its `start_time` falls inside the run's start..complete span; every such session is
+    summed (a run may restart its session). None when nothing matches or the matched sessions did no work
+    (0 tokens: a refused run is not a price observation). Unreadable or malformed session files are named
+    in `errors` and skipped; a non-finite cost or a negative count makes the whole run unpriced."""
+    target = str(Path(workspace).expanduser().resolve())
+    begin, end = started_ts - VIBE_SESSION_JOIN_SLACK_S, ended_ts + VIBE_SESSION_JOIN_SLACK_S
+    tokens_in = tokens_out = 0
+    cost = 0.0
+    matched = False
+    for directory in vibe_session_dirs():
+        rows, problems = _vibe_session_index(directory)
+        if errors is not None:
+            errors.extend(problems)
+        for wd, stamp, tin, tout, usd in rows:
+            if wd != target or not begin <= stamp <= end:
+                continue
             if not (type(tin) is int and type(tout) is int and isinstance(usd, (int, float))):
                 continue
-            if tin < 0 or tout < 0 or usd < 0:
-                continue
+            if tin < 0 or tout < 0 or not math.isfinite(float(usd)) or usd < 0:
+                return None
             matched = True
             tokens_in, tokens_out, cost = tokens_in + tin, tokens_out + tout, cost + float(usd)
-    if not matched or tokens_in + tokens_out == 0:
+    if not matched or tokens_in + tokens_out == 0 or not math.isfinite(cost):
         return None
     return tokens_in, tokens_out, cost, VIBE_SESSION_COST_SOURCE
 
