@@ -150,3 +150,34 @@ def test_the_monitor_reads_an_expiry_retired_row_only_when_asked(tmp_path):
     assert [(r["capability"], r.get("retired_by_expiry")) for r in asked["rows"]] == [
         ("plain", True)
     ]
+
+
+def test_a_later_failure_keeps_earlier_renewals_and_reports_that_row(tmp_path, monkeypatch):
+    ledger = _ledger(
+        tmp_path,
+        {
+            "a-first": _plain_row("a-first", expiry=NOW + 2 * DAY),
+            "b-second": _plain_row("b-second", expiry=NOW + 2 * DAY),
+        },
+    )
+    real = capabilities.renew
+
+    def flaky(cap_id, **kw):
+        if cap_id == "b-second":
+            raise OSError("disk went away")
+        return real(cap_id, **kw)
+
+    monkeypatch.setattr(capabilities, "renew", flaky)
+    out = capabilities.auto_renew_on_outcomes(
+        [_vc("a-first", 4), _vc("b-second", 4)], now=NOW, horizon_days=14, path=ledger
+    )
+    assert [r["capability_id"] for r in out["renewed"]] == ["a-first"]
+    assert out["refused"] == [{"capability_id": "b-second", "reason": "OSError: disk went away"}]
+    assert "renewed 1; refused 1" in out["line"]
+
+
+def test_the_cadence_contract_names_the_renewal_write_and_its_switch():
+    import cadence_registry
+
+    gate = next(r for r in cadence_registry.CADENCE_STEPS if r["key"] == "switch-review")["gate"]
+    assert "ORCH_SWITCH_REVIEW=1" in gate and capabilities.AUTO_RENEW_SWITCH in gate

@@ -1949,8 +1949,11 @@ def auto_renew_on_outcomes(
                     else None
                 ),
             )
-        except ValueError as exc:
-            out["refused"].append({"capability_id": cid, "reason": str(exc)[:300]})
+        except Exception as exc:  # noqa: BLE001 — one row's failure must not drop earlier renewals
+            # `renew` writes the ledger before returning, so rows already renewed stay renewed; a later
+            # row's refusal (ValueError) or failure (e.g. OSError) is reported for that row alone.
+            kind = "" if isinstance(exc, ValueError) else f"{type(exc).__name__}: "
+            out["refused"].append({"capability_id": cid, "reason": f"{kind}{exc}"[:300]})
             continue
         out["renewed"].append({**done, "success": success})
     out["delivering_inside_window"] = len(out["refused"])

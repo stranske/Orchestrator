@@ -2854,8 +2854,11 @@ def review(
                 "disabled": False,
             }
     # Auto-renew on outcomes (owner 2026-11-28): a delivering row renews itself here, before the expiry
-    # notice below reads the ledger. Only on the live weekly run or an explicit ledger path: a test that
-    # injects a clock against the real ledger must never write it.
+    # notice below reads the ledger. This is the one write the weekly run makes WITHOUT
+    # ORCH_SWITCH_REVIEW=1 (that flag still gates owner questions): the owner chose renewal on outcomes
+    # over hand renewal, and its own kill switch is ORCH_CAPABILITY_AUTO_RENEW=0 (cadence_registry row).
+    # Only on the live weekly run or an explicit ledger path: a test that injects a clock against the
+    # real ledger must never write it.
     auto_renew: dict = {"line": "auto-renew on outcomes: not run (injected clock, real ledger)"}
     vc_rows: list[dict] = list(value_chain.get("rows") or [])  # type: ignore[call-overload]
     if live_review_clock or path is not None:
