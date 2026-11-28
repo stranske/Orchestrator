@@ -1523,7 +1523,15 @@ def _vibe_model_for(workspace: str, started_ts: int | None, window_s: int) -> st
     itself had active for that session -- read from vibe's record of the run, not from our request.
     """
     target = str(Path(workspace).expanduser().resolve())
-    for meta_path in sorted(VIBE_SESSIONS.glob("*/meta.json"), reverse=True):
+    # Both homes, newest session first (session dirs are `session_YYYYMMDD_HHMMSS_<id>`). Lane runs write
+    # under the runtime home (dispatcher forces `save_dir` there); reading only the real home saw 37
+    # sessions ending 2026-11-11 while 1,300 lane sessions sat in the runtime home (found 2026-11-27).
+    metas = sorted(
+        (path for directory in vibe_session_dirs() for path in directory.glob("*/meta.json")),
+        key=lambda path: path.parent.name,
+        reverse=True,
+    )
+    for meta_path in metas:
         try:
             meta = json.loads(meta_path.read_text(errors="ignore") or "{}")
         except (OSError, json.JSONDecodeError):

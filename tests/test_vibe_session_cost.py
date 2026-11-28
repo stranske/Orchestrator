@@ -185,3 +185,25 @@ def test_header_cwd_keeps_spaces_and_an_unfinished_run_is_not_priced(brain, tmp_
     assert ledger_reconcile._vibe_run_cost(rows, log, "r9", None) is None  # no complete row yet
     rows.append({"agent": "vibe", "event": "complete", "started_ts": start, "ts": start + 30})
     assert ledger_reconcile._vibe_run_cost(rows, log, "r9", None)[2] == pytest.approx(0.75)
+
+
+def test_the_model_reader_finds_lane_sessions_in_the_runtime_home(brain, tmp_path):
+    """Lane runs write under the runtime home; the identity reader read only the real home (2026-11-27)."""
+    ws = tmp_path / "w"
+    ws.mkdir()
+    runtime = adapters.AGENT_RUNTIME / "vibe" / ".vibe" / "logs" / "session"
+    _session(runtime, "session_20261127_064031_aaaa", ws, "2026-11-27T06:40:31+00:00", 1, 1, 0.1)
+    assert adapters._vibe_model_for(str(ws), None, 300) == "mistral-medium-3.5"
+    # Newest first across both homes: a newer real-home session wins over an older runtime one.
+    newer = adapters.VIBE_SESSIONS / "session_20261128_010000_bbbb"
+    newer.mkdir(parents=True)
+    (newer / "meta.json").write_text(
+        json.dumps(
+            {
+                "start_time": "2026-11-28T01:00:00+00:00",
+                "environment": {"working_directory": str(ws.resolve())},
+                "config": {"active_model": "devstral-2"},
+            }
+        )
+    )
+    assert adapters._vibe_model_for(str(ws), None, 300) == "devstral-2"
