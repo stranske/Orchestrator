@@ -1151,7 +1151,13 @@ round item) — closed `NOT_PLANNED` / `DUPLICATE` is FAIL (`abandoned`), closed
 judged `durable` is PASS, open or pending waits, a failed follow-up merge is not graded, a `[backlog]`
 route has no rule; and an acted opener `done` by a reopen — reopened is FAIL, closed for the sweep's
 `GRACE_DAYS` is PASS. Closer `repair` / `evidence`, opener `park`, closer triage and every `offload`
-task-type run remain ungraded (reasons in the lever-4 concept note).
+task-type run remain ungraded (reasons in the lever-4 concept note). Three joins were widened the same
+day, each to a machine fact: a merge also counts from a run on the PR itself that names the PR in
+its target with no `pr_number` (local delegates; 41 decisions waited forever without it); a round
+with two or more same-agent runs takes the latest run whose own offload log answered the decision
+the round acted on (all 155 `ambiguous` rounds resolved; a round no log answers stays `ambiguous`);
+and an opener `start` whose PR the sweep closed `abandoned` with nothing merged is graded by the
+issue's own fate with the follow-up rule (a closer `close` on such a PR is counted, final, no rule).
 `review_outcomes.py probe` prints the chain per family for both judges, one line per graded rule, and the pass number (graded
 closer-judge outcomes on runs made after the first deploy). Kill switch `ORCH_DISABLE_STEPS=review-outcomes`; rollback `review_outcomes.py
 restore` deletes only its own rows (notes prefix). The loop diagram gains one feedback chip.
