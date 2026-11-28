@@ -4179,7 +4179,7 @@ RESUME_COMMANDS = {
 
 def record_resume_token(run_id, agent, kind, token, cwd=None) -> None:
     """Store a per-run CLI resume identifier (harvested from run logs by ledger_reconcile)."""
-    with _conn() as c:
+    with closing(_conn()) as c, c:  # closed per call: see record_cost
         c.execute(
             "INSERT OR REPLACE INTO resume_tokens VALUES (?,?,?,?,?,?)",
             (run_id, agent, kind, token, cwd, int(time.time())),
@@ -5812,7 +5812,11 @@ def completion_event_episodes(
 def record_cost(run_id, tokens_in=0, tokens_out=0, cost_usd=0.0, latency_s=0.0, source="ledger"):
     from adapters import CURSOR_CLI_COST_SOURCE, CURSOR_CLI_COST_SOURCES
 
-    with _conn() as c:
+    # closing(): `with conn:` only commits. A sqlite3 connection's statement cache refers back to the
+    # connection, so it is freed only by a full GC pass; ledger_reconcile calls this once per run
+    # (~12,000 per tick) and hit the launchd tick's 256 open-file limit at the 254th call, failing
+    # every tick from 2026-10-24 ("unable to open database file").
+    with closing(_conn()) as c, c:
         # Preserve the run's terminal Cursor result when trace import or ledger reconciliation
         # writes later. A priced terminal measurement may replace an unpriced one.
         # An overlapping reconcile may still have a pre-completion latency of zero.
