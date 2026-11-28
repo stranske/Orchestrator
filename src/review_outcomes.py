@@ -96,6 +96,7 @@ import sys
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
+from typing import Any
 
 import feedback
 
@@ -226,6 +227,195 @@ def acted_pass(con, now: int) -> dict:
         "passed": value >= ACTED_PASS,
         "since": since,
     }
+
+
+# Judge seats from the graded record (owner, 2026-11-28). Cursor joined the adjudicator role on
+# probation: its own lane-judge record demotes it to last choice, then removes it, when it judges
+# worse than its peers. Muse earns a review rung (muse_ladder) from its graded lane-judge record and,
+# until it has, gets a small weekly floor of low-stakes judge calls so that record can form at all.
+# Every bar reads the same JUDGE_WINDOW_DAYS window, so a demotion drains as its evidence ages out.
+JUDGE_WINDOW_DAYS = 90
+JUDGE_PEERS = ("gemini", "codex", "claude")
+CURSOR = "cursor"
+CURSOR_MIN_RUNS = 10  # usable-answer bar needs this many judge runs
+CURSOR_MIN_USABLE = 0.5
+CURSOR_LAST_MIN_GRADED = 10
+CURSOR_LAST_MIN_FAIL = 3
+CURSOR_LAST_RATIO = 3.0  # x the peers' pooled FAIL rate
+CURSOR_REMOVE_MIN_GRADED = 20
+CURSOR_REMOVE_RATE = 0.25
+CURSOR_REMOVE_RATIO = 4.0
+CURSOR_VERDICT_GRADED = 20  # pass number: a graded record big enough to keep or demote on
+MUSE = "muse"
+MUSE_RUNG_MIN_GRADED = 5
+MUSE_RUNG_MIN_PASS = 0.80
+MUSE_FLOOR_PER_WEEK = 7
+SEATS_CACHE_SECONDS = 300
+_SEATS_CACHE: dict[str, tuple[float, dict]] = {}
+
+
+def judge_records(con, now: int) -> dict[str, dict]:
+    """Per agent, lane-judge runs in the window: runs, runs_7d, usable (a decision recorded),
+    graded (PASS/FAIL by this module), fail, fail_ts (when each graded FAIL run was made)."""
+    callers = (_caller(closer_state()), _caller(opener_state()))
+    prefixes = tuple(NOTE_PREFIXES.values())
+    out: dict[str, dict] = defaultdict(
+        lambda: {"runs": 0, "runs_7d": 0, "usable": 0, "graded": 0, "fail": 0, "fail_ts": []}
+    )
+    for agent, ts, decided, notes, verdict in con.execute(
+        "SELECT r.agent, r.ts, d.run_id IS NOT NULL, o.notes, o.adjudicated_verdict FROM runs r "
+        "LEFT JOIN review_decisions d ON d.run_id=r.run_id LEFT JOIN outcomes o ON o.run_id=r.run_id "
+        "WHERE r.task_type='review' AND r.target IN (?,?) AND r.ts>=?",
+        (*callers, now - JUDGE_WINDOW_DAYS * 86400),
+    ):
+        row = out[str(agent)]
+        row["runs"] += 1
+        row["runs_7d"] += int(ts) >= now - 7 * 86400
+        row["usable"] += bool(decided)
+        if str(notes or "").startswith(prefixes) and verdict:
+            row["graded"] += 1
+            if verdict == "FAIL":
+                row["fail"] += 1
+                row["fail_ts"].append(int(ts))
+    return dict(out)
+
+
+def _rate(num: int, den: int) -> float | None:
+    return num / den if den else None
+
+
+def cursor_seat(records: dict[str, dict], now: int) -> dict:
+    """eligible | last_choice | removed, with the numbers and what would clear it."""
+    blank = {"runs": 0, "runs_7d": 0, "usable": 0, "graded": 0, "fail": 0, "fail_ts": []}
+    c = records.get(CURSOR, blank)
+    peer_graded = sum(records.get(a, blank)["graded"] for a in JUDGE_PEERS)
+    peer_fail = sum(records.get(a, blank)["fail"] for a in JUDGE_PEERS)
+    peer_rate = _rate(peer_fail, peer_graded)
+    rate = _rate(c["fail"], c["graded"])
+    usable = _rate(c["usable"], c["runs"])
+    state, why = "eligible", "below every demotion bar"
+    if (
+        peer_rate is not None
+        and rate is not None
+        and c["graded"] >= CURSOR_REMOVE_MIN_GRADED
+        and rate >= max(CURSOR_REMOVE_RATE, CURSOR_REMOVE_RATIO * peer_rate)
+    ):
+        state, why = "removed", f"FAIL {rate:.0%} on {c['graded']} graded vs peers {peer_rate:.0%}"
+    elif usable is not None and c["runs"] >= CURSOR_MIN_RUNS and usable < CURSOR_MIN_USABLE:
+        state, why = "last_choice", f"usable answers {usable:.0%} of {c['runs']} runs"
+    elif (
+        peer_rate is not None
+        and rate is not None
+        and c["graded"] >= CURSOR_LAST_MIN_GRADED
+        and c["fail"] >= CURSOR_LAST_MIN_FAIL
+        and rate >= CURSOR_LAST_RATIO * peer_rate
+    ):
+        state, why = (
+            "last_choice",
+            f"FAIL {rate:.0%} on {c['graded']} graded vs peers {peer_rate:.0%}",
+        )
+    # The drain: every bar reads the window, so a demotion clears as its evidence ages out.
+    clears = (
+        None
+        if state == "eligible" or not c["fail_ts"]
+        else min(c["fail_ts"]) + JUDGE_WINDOW_DAYS * 86400
+    )
+    return {
+        "state": state,
+        "why": why,
+        "runs": c["runs"],
+        "usable": c["usable"],
+        "graded": c["graded"],
+        "fail": c["fail"],
+        "rate": rate,
+        "peer_rate": peer_rate,
+        "first_fail_ages_out": clears,
+    }
+
+
+def muse_seat(records: dict[str, dict]) -> dict:
+    """The review rung (lifted once graded >= 5 at >= 80% PASS) and the weekly low-stakes floor."""
+    blank = {"runs": 0, "runs_7d": 0, "usable": 0, "graded": 0, "fail": 0, "fail_ts": []}
+    m = records.get(MUSE, blank)
+    pass_rate = _rate(m["graded"] - m["fail"], m["graded"])
+    lifted = m["graded"] >= MUSE_RUNG_MIN_GRADED and (pass_rate or 0) >= MUSE_RUNG_MIN_PASS
+    return {
+        "lifted": lifted,
+        "graded": m["graded"],
+        "pass_rate": pass_rate,
+        "runs_7d": m["runs_7d"],
+        "floor_due": not lifted and m["runs_7d"] < MUSE_FLOOR_PER_WEEK,
+    }
+
+
+def judge_seats(now: int | None = None, *, fresh: bool = False) -> dict:
+    """Both seats from the Brain, read-only, cached briefly. An unreadable Brain leaves cursor
+    eligible and muse late with no floor (`state: unmeasured`)."""
+    now = int(time.time()) if now is None else now
+    key = str(Path(feedback.DB_PATH).expanduser().resolve())
+    hit = _SEATS_CACHE.get(key)
+    if not fresh and hit and time.time() - hit[0] < SEATS_CACHE_SECONDS:
+        return hit[1]
+    try:
+        c = _db_ro()
+        try:
+            records = judge_records(c, now)
+        finally:
+            c.close()
+    except Exception as exc:  # noqa: BLE001 - routing must not stop on an unreadable Brain
+        out: dict[str, Any] = {
+            "state": "unmeasured",
+            "reason": f"Brain unreadable ({exc})",
+            "cursor": {
+                "state": "eligible",
+                "why": "unmeasured",
+                "runs": 0,
+                "usable": 0,
+                "graded": 0,
+                "fail": 0,
+                "rate": None,
+                "peer_rate": None,
+                "first_fail_ages_out": None,
+            },
+            "muse": {
+                "lifted": False,
+                "graded": 0,
+                "pass_rate": None,
+                "runs_7d": 0,
+                "floor_due": False,
+            },
+        }
+        _SEATS_CACHE[key] = (time.time(), out)
+        return out
+    out = {
+        "state": "measured",
+        "reason": None,
+        "cursor": cursor_seat(records, now),
+        "muse": muse_seat(records),
+    }
+    _SEATS_CACHE[key] = (time.time(), out)
+    return out
+
+
+def seats_line(seats: dict) -> str:
+    def pct(x):
+        return "-" if x is None else f"{x:.0%}"
+
+    c, m = seats["cursor"], seats["muse"]
+    clears = (
+        ""
+        if not c.get("first_fail_ages_out")
+        else "; clears as FAILs age out, first "
+        + time.strftime("%Y-%m-%d", time.gmtime(c["first_fail_ages_out"]))
+    )
+    return (
+        f"judge seats ({seats['state']}): cursor {c['state']} ({c['why']}; runs {c['runs']}, "
+        f"usable {c['usable']}, graded {c['graded']} / {CURSOR_VERDICT_GRADED}, FAIL {c['fail']} = "
+        f"{pct(c['rate'])} vs peers {pct(c['peer_rate'])}{clears}); muse review rung "
+        f"{'lifted' if m['lifted'] else 'late'} (graded {m['graded']} / {MUSE_RUNG_MIN_GRADED}, PASS "
+        f"{pct(m['pass_rate'])}), floor {m['runs_7d']} / {MUSE_FLOOR_PER_WEEK} this week"
+        + (" (due)" if m["floor_due"] else "")
+    )
 
 
 def closer_state() -> Path:
@@ -982,6 +1172,7 @@ def probe(since: int | None = None) -> dict:
         acted = acted_pass(c, int(time.time()))
         return {
             "acted_pass": acted,
+            "judge_seats": judge_seats(fresh=True),
             "since": since,
             "families": families,
             "totals": dict(totals),
@@ -1052,6 +1243,8 @@ def format_probe(result: dict) -> str:
             f"judge picks from graded weights {acted['value']} / {acted['pass_at']} "
             f"({'PASS' if acted['passed'] else 'not yet'}; {when})"
         )
+    if result.get("judge_seats"):
+        lines.append(seats_line(result["judge_seats"]))
     return "\n".join(lines)
 
 
@@ -1072,6 +1265,8 @@ def main(argv=None) -> int:
         if args.json:
             print(json.dumps(out, sort_keys=True))
         else:
+            # Monitoring for the judge seats (cursor on probation, muse's review rung), every tick.
+            print(seats_line(judge_seats(fresh=True)))
             lab = out["label"]
             i = Counter(out["ingest"]) + Counter(out["rounds"]) + Counter(out["opener_rounds"])
             awaiting_rule = sum(v for k, v in lab.items() if k.startswith("awaiting_rule:"))

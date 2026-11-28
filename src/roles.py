@@ -1139,7 +1139,9 @@ ROLE_REGISTRY: dict[str, Role] = {
             "minority-veto aggregation math."
         ),
         route_as="review",
-        eligible_backends=frozenset({"gemini", "codex", "claude", "muse"}),
+        # cursor joined 2026-11-28 (owner) on probation: review_outcomes.cursor_seat demotes it to last
+        # choice, then removes it, from its own graded lane-judge record (route_role applies it).
+        eligible_backends=frozenset({"gemini", "codex", "claude", "muse", "cursor"}),
         mode="full",
         input_keys=("case",),
         output_keys=(
@@ -1555,12 +1557,18 @@ def route_role(
     high_leverage: bool = False,
     exploration_rate: float | None = None,
     only: set[str] | None = None,
+    low_stakes: bool = False,
 ) -> dict | None:
     """Pick the LLM backend for a role via router.select_agent, restricted to eligible_backends.
 
     Mirrors select_remote_agent's economics: RESERVE seats (claude) are excluded for routine role
     work and only used as a last resort (or when high_leverage=True). Returns the router entry
     {agent, mode, state, capacity_policy, ...} or None when nothing eligible has capacity.
+
+    For the adjudicator (owner, 2026-11-28) the judge seats apply (review_outcomes.judge_seats):
+    cursor `last_choice` is tried only after every other candidate, cursor `removed` is not a
+    candidate, and a `low_stakes` call (the opener's ordinary judge) goes to muse first while muse
+    has no review rung and fewer than MUSE_FLOOR_PER_WEEK judge runs this week.
     """
     role = get_role(role_name)
     cap = cap if cap is not None else router.load_capacity()
@@ -1590,7 +1598,10 @@ def route_role(
     if not lw and isinstance(learned_all, dict):
         lw = learned_all.get(role.route_as)
         bucket = role.route_as
+    seats = _judge_seats() if role.name == "adjudicator" else None
     eligible = set(role.eligible_backends)
+    if seats and seats["cursor"]["state"] == "removed":
+        eligible.discard("cursor")
     if only is not None:
         # Explicit exploration is a restriction, never a way to inject a backend absent from this
         # role's declared contract.  This reaches backup-only Muse through the unchanged router
@@ -1601,21 +1612,35 @@ def route_role(
     else:
         eligible -= router.BACKUP_AGENTS
     pool = eligible if high_leverage else (eligible - RESERVE)
-    pick = router.select_agent(
-        role.route_as,
-        cap,
-        only=pool,
-        learned=lw,
-        exploration_rate=exploration_rate,
-    )
-    if pick is None and not high_leverage:  # last resort: allow reserve seats
+    last = {"cursor"} if seats and seats["cursor"]["state"] == "last_choice" else set()
+    pick = None
+    policy = None
+    if seats and low_stakes and not high_leverage and seats["muse"]["floor_due"] and "muse" in pool:
+        pick = router.select_agent(
+            role.route_as, cap, only={"muse"}, learned=lw, exploration_rate=exploration_rate
+        )
+        policy = "muse_review_floor" if pick else None
+    # Candidate sets in order: the pool without a last-choice seat, then with it; then the reserve
+    # seats as before, again holding the last-choice seat back until nothing else answers.
+    tiers = [pool - last, pool]
+    if not high_leverage:  # last resort: allow reserve seats
+        tiers += [eligible - last, eligible]
+    tried_sets: list[set[str]] = []
+    for cands in tiers:
+        if pick is not None:
+            break
+        if not cands or cands in tried_sets:
+            continue
+        tried_sets.append(cands)
         pick = router.select_agent(
             role.route_as,
             cap,
-            only=eligible,
+            only=cands,
             learned=lw,
             exploration_rate=exploration_rate,
         )
+    if pick and pick.get("agent") in last:
+        policy = "cursor_last_choice"
     if pick and pick.get("agent"):
         # Which learned weights ranked this pick, and how many graded observations the chosen
         # agent had there. route_decision_record keeps both on the run, so the review-outcomes
@@ -1624,8 +1649,19 @@ def route_role(
             **pick,
             "learned_bucket": bucket if lw else None,
             "learned_n_obs": router._learned_n_obs(lw, pick["agent"]),
+            **({"seat_policy": policy} if policy else {}),
         }
     return pick
+
+
+def _judge_seats() -> dict | None:
+    """review_outcomes.judge_seats, or None when it cannot be read (the role then routes as before)."""
+    try:
+        import review_outcomes  # noqa: PLC0415  (lazy: review_outcomes imports feedback)
+
+        return review_outcomes.judge_seats()
+    except Exception:  # noqa: BLE001 - a judge pick must not fail on the seat policy
+        return None
 
 
 def reset_role_invocation_counts() -> None:
