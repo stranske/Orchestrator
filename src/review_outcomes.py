@@ -63,6 +63,16 @@ and is re-read next pass):
 `park`, `repair`, `evidence`, and the model's raw answer before the host's downgrade have no rule:
 see the lever-4 concept note for why.
 
+FINISHING THE JOINS (2026-11-27, measured on a copy of the live Brain: 365 graded before, 448 after).
+- A merge also counts from a run on the PR itself (target `repo#pr`, no `pr_number`: local
+  delegates). 41 merged decisions had only such rows and waited as `no_merge_row` forever.
+- A round with two or more same-agent runs (the lane re-judged after evidence or an unusable
+  answer) takes the latest run whose own offload log answered the decision the round acted on
+  (`answered`); all 155 `ambiguous` rounds resolved. A round no log answers stays `ambiguous`.
+- A PR the sweep closed `abandoned` with nothing merged is final, not a wait. An opener `start` on
+  it is graded by the issue's own fate with the follow-up rule (closed not planned FAIL, delivered
+  by a durable merge PASS); a closer `close` on it is counted `pr_closed_unmerged`, no rule.
+
 The label is the durability sweep's or GitHub's issue state, never a green check (CLAUDE.md §2). This module writes only
 outcome rows it owns (notes start with `NOTE_PREFIX`) and never touches another writer's row.
 Kill switch: `ORCH_DISABLE_STEPS=review-outcomes`. Rollback: `restore` deletes the outcome rows
@@ -255,6 +265,48 @@ def _judge_runs(c, state: Path) -> dict:
     return out
 
 
+def _log_dir() -> Path:
+    import dispatcher  # the one definition of where offload logs live
+
+    return dispatcher.DISPATCH_LOG_DIR
+
+
+_OBJECT_START = re.compile(r"^[ \t]*\{", re.M)
+
+
+def _answers(text: str, decisions) -> list[str]:
+    """Every decision named by a JSON object that opens a line of `text`, in order. An answer may
+    be pretty-printed over many lines; codex prints it inside an `agent_message` event."""
+    found: list[str] = []
+    decoder = json.JSONDecoder()
+    for start in _OBJECT_START.finditer(text):
+        try:
+            obj, _end = decoder.raw_decode(text, start.end() - 1)
+        except ValueError:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        item = obj.get("item")
+        if isinstance(item, dict) and item.get("type") == "agent_message":
+            found += _answers(str(item.get("text") or ""), decisions)
+        elif obj.get("decision") in decisions:
+            found.append(str(obj["decision"]))
+    return found
+
+
+def answered(run_id: str, decisions) -> str | None:
+    """The decision a judge run answered, read from its own offload log (its last answer), or None."""
+    parts = str(run_id).split(":")
+    if len(parts) != 3 or parts[0] != "offload":
+        return None
+    try:
+        text = (_log_dir() / f"offload.{parts[1]}.{parts[2]}.log").read_text(errors="replace")
+    except OSError:
+        return None
+    said = _answers(text, decisions)
+    return said[-1] if said else None
+
+
 def _opener_pr(state: Path, target: str) -> int | None:
     path = state / "targets" / (re.sub(r"[^a-z0-9]+", "_", target.lower()) + ".json")
     try:
@@ -315,9 +367,28 @@ def ingest_rounds(producer: str, state: Path | None = None, *, now: int | None =
                 low = previous if previous is not None else round_ts - 3600
                 found = [
                     rid
-                    for ts, rid in runs.get((subject.lower(), judge.get("provider")), [])
+                    for ts, rid in sorted(runs.get((subject.lower(), judge.get("provider")), []))
                     if low <= ts <= round_ts
                 ]
+                if len(found) > 1:
+                    # Two or more runs in one round: the lane re-judged (after collecting evidence,
+                    # or after an unusable answer) and acted on the LAST usable answer. Take the
+                    # latest run whose own log answered the decision the round acted on. A round
+                    # already resolved on an earlier pass is not re-read.
+                    done = {
+                        rid
+                        for (rid,) in c.execute(
+                            "SELECT run_id FROM review_decisions WHERE producer=? AND subject_id=? "
+                            "AND judged_ts=? AND decision=?",
+                            (producer, subject, round_ts, decision),
+                        )
+                    }
+                    said = [rid for rid in found if rid in done] or [
+                        rid for rid in found if answered(rid, decisions) == decision
+                    ]
+                    if said:
+                        counts["resolved_by_log"] += 1
+                        found = said[-1:]
                 if len(found) != 1:
                     counts["ambiguous" if found else "no_run"] += 1
                     continue
@@ -340,22 +411,43 @@ def ingest_rounds(producer: str, state: Path | None = None, *, now: int | None =
     return counts
 
 
+# The work runs on a PR, as the sweep's rows name them: a run whose pr_number is the PR (target the
+# PR or its issue), or a run on the PR itself (a local delegate or keepalive continuing on its
+# branch) that names the PR in its target and leaves pr_number empty. 2026-11-27: 41 merged
+# decisions had only the second kind and waited forever as `no_merge_row`. A target naming the
+# ISSUE with no pr_number is not taken: which PR it worked on is not on the row.
+_PR_RUNS = (
+    "COALESCE(r.task_type,'')!='review' AND ((r.pr_number=? AND lower(r.target) IN (?,?)) "
+    "OR (r.pr_number IS NULL AND lower(r.target)=?))"
+)
+
+
+def _pr_run_args(subject_id: str, review_of: str) -> tuple:
+    repo, pr = review_of.rsplit("#", 1)
+    issue = subject_id.rsplit("#", 1)[1]
+    return (int(pr), f"{repo.lower()}#{pr}", f"{repo.lower()}#{issue}", f"{repo.lower()}#{pr}")
+
+
+def closed_unmerged(c, subject_id: str, review_of: str) -> bool:
+    """True when the sweep closed the PR's work as `abandoned` with nothing merged: a final state."""
+    return bool(
+        c.execute(
+            "SELECT 1 FROM runs r JOIN outcomes o ON o.run_id=r.run_id "
+            "WHERE o.merged=0 AND o.durability='abandoned' AND " + _PR_RUNS + " LIMIT 1",
+            _pr_run_args(subject_id, review_of),
+        ).fetchone()
+    )
+
+
 def merge_verdict(c, subject_id: str, review_of: str) -> tuple[str, str]:
     """(state, durability) of the merge `review_of`, from the sweep's verdicts on its run rows.
 
     state: `final` (durability is a sweep verdict), `unjudgeable`, `pending`, `no_merge_row` or
     `conflict`."""
-    repo, pr = review_of.rsplit("#", 1)
-    issue = subject_id.rsplit("#", 1)[1]
     rows = c.execute(
         "SELECT DISTINCT o.durability FROM runs r JOIN outcomes o ON o.run_id=r.run_id "
-        "WHERE o.merged=1 AND COALESCE(r.task_type,'')!='review' "
-        "AND r.pr_number=? AND lower(r.target) IN (?,?)",
-        (
-            int(pr),
-            f"{repo.lower()}#{pr}",
-            f"{repo.lower()}#{issue}",
-        ),
+        "WHERE o.merged=1 AND " + _PR_RUNS,
+        _pr_run_args(subject_id, review_of),
     ).fetchall()
     durabilities = {str(d or "pending") for (d,) in rows}
     if not durabilities:
@@ -604,7 +696,9 @@ def label(
             "SELECT run_id, producer, subject_id, review_of, decision, judged_ts FROM review_decisions "
             "ORDER BY run_id"
         ).fetchall()
-        done_rows, followup_rows = [], []
+        done_rows: list = []
+        followup_rows: list = []
+        unmerged_starts: list = []
         for run_id, producer, subject_id, review_of, decision, judged_ts in decisions:
             if decision not in GRADED.get(producer, ()):
                 counts[f"awaiting_rule:{decision}"] += 1
@@ -614,6 +708,16 @@ def label(
                     counts[f"awaiting_rule:{decision}"] += 1
                     continue
                 merge_state, durability = merge_verdict(c, subject_id, review_of)
+                if merge_state == "no_merge_row" and closed_unmerged(c, subject_id, review_of):
+                    if producer == OPENER:
+                        # The started PR never merged. The start claimed the issue was worth
+                        # starting: graded by the issue's own fate, as a filed follow-up is.
+                        unmerged_starts.append((run_id, subject_id, review_of))
+                    else:
+                        # A closer `close` on a PR that never merged: no rule (what `close` claims
+                        # about a PR that did not merge is not one machine fact).
+                        counts["pr_closed_unmerged"] += 1
+                    continue
                 if merge_state in {"pending", "no_merge_row", "conflict"}:
                     counts[merge_state] += 1
                     continue
@@ -645,12 +749,32 @@ def label(
                 counts["followup_backlog_route"] += 1
             else:
                 followup_rows.append((run_id, subject_id, filed[run_id][0]))
-        if not done_rows and not followup_rows:
+        if not done_rows and not followup_rows and not unmerged_starts:
             return counts
         c.commit()  # end the write transaction: the GitHub read must not hold the Brain's lock
         fates = issue_fates(
-            [s for _r, s, _t in done_rows] + [f for _r, _s, f in followup_rows], _gh=_gh
+            [s for _r, s, _t in done_rows]
+            + [f for _r, _s, f in followup_rows]
+            + [s for _r, s, _p in unmerged_starts],
+            _gh=_gh,
         )
+        for run_id, subject_id, review_of in unmerged_starts:
+            verdict, durability, failure_class, why = grade_followup(
+                c, subject_id, fates.get(subject_id)
+            )
+            if verdict is None and failure_class is None:
+                counts[f"start_unmerged:{durability}"] += 1
+                continue
+            _write(
+                c,
+                run_id,
+                verdict,
+                durability,
+                failure_class,
+                f"{OPENER_NOTE_PREFIX}start on {subject_id}; the started {review_of} closed "
+                f"unmerged; {why}",
+                counts,
+            )
         grace = _grace_seconds()
         for run_id, subject_id, judged_ts in done_rows:
             verdict, durability, why = grade_done(fates.get(subject_id), judged_ts, now, grace)
@@ -836,8 +960,20 @@ def main(argv=None) -> int:
             awaiting_rule = sum(v for k, v in lab.items() if k.startswith("awaiting_rule:"))
             skipped = ", ".join(
                 f"{k} {i[k]}"
-                for k in ("ambiguous", "no_run", "not_acted", "no_pr_yet", "rounds_missing")
+                for k in (
+                    "resolved_by_log",
+                    "ambiguous",
+                    "no_run",
+                    "not_acted",
+                    "no_pr_yet",
+                    "rounds_missing",
+                )
                 if i.get(k)
+            )
+            unmerged_start = ", ".join(
+                f"{k.split(':', 1)[1]} {v}"
+                for k, v in sorted(lab.items())
+                if k.startswith("start_unmerged:")
             )
             print(
                 f"review_outcomes: ingested {i.get('recorded', 0)} new decisions ({i.get('known', 0)} known"
@@ -845,6 +981,8 @@ def main(argv=None) -> int:
                 f"graded {lab.get('graded', 0)} (written {lab.get('written', 0)}), excluded {lab.get('excluded', 0)}; "
                 f"awaiting the sweep {lab.get('pending', 0)}, drainable {lab.get('pending', 0)}; "
                 f"no merged run row {lab.get('no_merge_row', 0)} (re-read every pass); "
+                f"close on a PR closed unmerged {lab.get('pr_closed_unmerged', 0)} (final, no rule); "
+                f"start on a PR closed unmerged, by the issue: {unmerged_start or 'none waiting'}; "
                 f"conflict {lab.get('conflict', 0)}; no outcome rule {awaiting_rule}; "
                 f"followup: open {lab.get('followup_open', 0)} (drains when the issue closes), "
                 f"backlog route {lab.get('followup_backlog_route', 0)}, not acted "

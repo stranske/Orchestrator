@@ -36,6 +36,8 @@ def brain(monkeypatch, tmp_path):
     opener = tmp_path / "opener-core"
     (opener / "targets").mkdir(parents=True)
     monkeypatch.setenv("OPENER_CORE_STATE", str(opener))
+    (tmp_path / "logs").mkdir()
+    monkeypatch.setattr(ro, "_log_dir", lambda: tmp_path / "logs")
     return state
 
 
@@ -660,3 +662,135 @@ def test_a_reopen_counts_from_the_judges_own_close(brain):
     record = fate(closed=["2026-11-10T09:58:00Z"], reopened=["2026-11-10T09:59:00Z"])
     ro.label(now=NOW, _gh=github({SUBJECT: record}))
     assert outcome("offload:codex:70")[:2] == ("FAIL", "reopened")  # between close and round
+
+
+# --- finishing the grading (2026-11-27): PR-run rows, ambiguous rounds, starts on unmerged PRs ---
+
+
+def test_a_run_on_the_pr_itself_without_a_pr_number_is_its_merge(brain):
+    """A local delegate's row names the PR in its target and leaves pr_number empty."""
+    judge_run("offload:gemini:80")
+    rounds(brain, ("2026-11-27T10:00:00Z", [closer_item("close", run_id="offload:gemini:80")]))
+    feedback.record_run("stranske__Workflows_10-codex", SUBJECT, "implement", "codex")
+    feedback.record_outcome("stranske__Workflows_10-codex", merged=1, durability="broke_later")
+    out = ro.run()  # a row on the ISSUE with no pr_number does not say which PR merged
+    assert out["label"] == {"no_merge_row": 1}
+    feedback.record_run(
+        "stranske__Workflows_11-codex", f"stranske/Workflows#{PR}", "implement", "codex"
+    )
+    feedback.record_outcome("stranske__Workflows_11-codex", merged=1, durability="durable")
+    ro.run()
+    assert outcome("offload:gemini:80")[:2] == ("PASS", "durable")
+
+
+def offload_log(brain, run_id, text):
+    _o, agent, ns = run_id.split(":")
+    (brain.parent / "logs" / f"offload.{agent}.{ns}.log").write_text(text)
+
+
+SCHEMA_ECHO = '{"decision": "close" | "evidence" | "repair" | "followup",\n'
+
+
+def answer(decision):
+    return json.dumps({"decision": decision, "criteria": [{"status": "met"}]}, indent=2) + "\n"
+
+
+def test_an_ambiguous_round_is_resolved_by_each_runs_own_answer(brain):
+    t0 = ts_of("2026-11-20T10:00:00Z")
+    judge_run("offload:gemini:81", ts=t0 + 100)
+    judge_run("offload:gemini:82", ts=t0 + 200)
+    judge_run("offload:gemini:83", ts=t0 + 300)
+    # The first answered close (pretty-printed, after the prompt's schema echo); the second asked
+    # for evidence; the third printed nothing usable. The round acted on close.
+    offload_log(
+        brain, "offload:gemini:81", "=== header\n" + SCHEMA_ECHO + "noise\n" + answer("close")
+    )
+    offload_log(brain, "offload:gemini:82", answer("evidence"))
+    offload_log(brain, "offload:gemini:83", "OFFLOAD_INCOMPLETE: timeout\n")
+    rounds(
+        brain,
+        ("2026-11-20T10:00:00Z", []),
+        ("2026-11-20T10:15:00Z", [closer_item("close")]),
+    )
+    assert ro.ingest_rounds(ro.PRODUCER) == {"resolved_by_log": 1, "recorded": 1}
+    with feedback._conn() as c:
+        rows = c.execute("SELECT run_id, decision FROM review_decisions").fetchall()
+    assert rows == [("offload:gemini:81", "close")]
+    assert ro.ingest_rounds(ro.PRODUCER) == {"resolved_by_log": 1, "known": 1}
+
+
+def test_two_runs_that_gave_the_same_answer_take_the_latest(brain):
+    t0 = ts_of("2026-11-20T10:00:00Z")
+    judge_run("offload:codex:84", agent="codex", ts=t0 + 200)
+    judge_run("offload:codex:85", agent="codex", ts=t0 + 100)
+    event = {
+        "type": "item.completed",
+        "item": {"type": "agent_message", "text": answer("followup")},
+    }
+    offload_log(brain, "offload:codex:84", json.dumps(event) + "\n")
+    offload_log(brain, "offload:codex:85", answer("followup"))
+    rounds(
+        brain,
+        ("2026-11-20T10:00:00Z", []),
+        ("2026-11-20T10:15:00Z", [closer_item("followup", provider="codex")]),
+    )
+    ro.ingest_rounds(ro.PRODUCER)
+    with feedback._conn() as c:
+        assert c.execute("SELECT run_id FROM review_decisions").fetchall() == [
+            ("offload:codex:84",)
+        ]
+
+
+def test_an_ambiguous_round_whose_logs_do_not_answer_stays_ambiguous(brain):
+    t0 = ts_of("2026-11-20T10:00:00Z")
+    judge_run("offload:gemini:86", ts=t0 + 100)
+    judge_run("offload:gemini:87", ts=t0 + 200)
+    offload_log(brain, "offload:gemini:86", answer("repair"))  # not the decision the round acted on
+    rounds(
+        brain,
+        ("2026-11-20T10:00:00Z", []),
+        ("2026-11-20T10:15:00Z", [closer_item("close")]),
+    )
+    assert ro.ingest_rounds(ro.PRODUCER) == {"ambiguous": 1}
+
+
+def abandoned(pr=PR):
+    run_id = f"remote:stranske/Workflows#{pr}:codex"
+    feedback.record_run(
+        run_id, f"stranske/Workflows#{pr}", "implement", "codex", pr_number=pr, source="keepalive"
+    )
+    feedback.record_outcome(run_id, merged=0, durability="abandoned")
+
+
+@pytest.mark.parametrize(
+    "record, verdict, durability",
+    [
+        (fate(reason="NOT_PLANNED"), "FAIL", "abandoned"),
+        (fate(prs=[(51, True)]), "PASS", "durable"),
+    ],
+)
+def test_an_opener_start_whose_pr_closed_unmerged_is_graded_by_the_issue(
+    brain, record, verdict, durability
+):
+    opener_run("offload:codex:88")
+    opener_row(pr=PR)
+    rounds(
+        ro.opener_state(),
+        ("2026-11-27T10:00:00Z", [opener_item("start", "start", "offload:codex:88")]),
+    )
+    abandoned()
+    implemented("durable", pr=51)  # another PR delivered the issue (used by the PASS case)
+    ro.ingest_rounds(ro.OPENER)
+    ro.label(now=NOW, _gh=github({SUBJECT: record}))
+    got = outcome("offload:codex:88")
+    assert got[:2] == (verdict, durability)
+    assert got[3].startswith(ro.OPENER_NOTE_PREFIX) and "closed unmerged" in got[3]
+
+
+def test_a_close_on_a_pr_closed_unmerged_is_final_and_has_no_rule(brain):
+    judge_run("offload:gemini:89")
+    rounds(brain, ("2026-11-27T10:00:00Z", [closer_item("close", run_id="offload:gemini:89")]))
+    abandoned()
+    out = ro.run()
+    assert out["label"] == {"pr_closed_unmerged": 1}
+    assert outcome("offload:gemini:89") is None
