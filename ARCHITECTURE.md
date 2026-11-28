@@ -2212,8 +2212,14 @@ carries `comparative.assignment[task_type]`, each candidate's draw weight is mul
 `floor + share`, where share is the agent's fraction of the LP's assigned runs for that class and the
 floor is `COMPARATIVE_TILT_FLOOR` (0.25, `ORCH_COMPARATIVE_TILT_FLOOR`, never zero). The floor is the
 owner's choice over following the LP directly: the LP is linear and gives all-or-nothing splits, and
-families it cannot measure yet stay in the draw. Those are Vibe (flat plan, no pacing source) and
-Muse and agy (fewer than 20 judged runs on any class). Cursor was one until 2026-11-27: its CLI
+families it cannot measure yet stay in the draw. Those are Muse and agy (fewer than 20 judged runs on
+any class). Vibe was one until 2026-11-27: its plan looked flat, but its refusals read "Vibe budget
+exhausted" (HTTP 402), a dollar budget spent at Mistral API rates, and the CLI writes that same unit
+per session (`stats.session_cost`, prompt and completion tokens) under the lane runtime home.
+`adapters.vibe_session_cost` joins a run to its session(s) by the run header's `cwd=` and the run's
+start/complete window, `ledger_reconcile` records it as `vibe-session` (refused, zero-token sessions
+are not prices), and `comparative` treats Vibe cost-only like Cursor once 20 runs are priced. 764 of
+1,264 lane Vibe runs priced from their sessions (mean $4.59, median $3.22 per run). Cursor was one until 2026-11-27: its CLI
 result carries `usage` (input, output, cache read and cache write tokens) but no `model`, so
 `adapters.cursor_result_cost` priced none of it. It now prices from the run's requested model
 (`cursor:composer-2.5` on the ledger start row) at Composer 2.5 list prices, cache tokens included,
