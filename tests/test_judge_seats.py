@@ -310,3 +310,36 @@ def test_seats_are_cached_briefly(brain, monkeypatch):
     monkeypatch.setattr(time, "time", lambda: 10**12)
     with pytest.raises(pytest.fail.Exception):
         ro.judge_seats(NOW)
+
+
+def test_reserve_claude_answers_before_a_last_choice_cursor(routing):
+    """CodeRabbit on #1534: with the ordinary judges shed, the reserve seat comes before last choice."""
+    routing["seats"] = _seats(cursor="last_choice")
+    cap = {
+        "agents": {
+            "codex": {"state": "shed"},
+            "gemini": {"state": "shed"},
+            "muse": {"state": "shed"},
+            "claude": {"state": "ok"},
+            "cursor": {"state": "ok"},
+        }
+    }
+    pick = roles.route_role("adjudicator", cap=cap, learned=CURSOR_FIRST, exploration_rate=0.0)
+    assert pick["agent"] == "claude" and "seat_policy" not in pick
+    cap["agents"]["claude"] = {"state": "shed"}
+    pick = roles.route_role("adjudicator", cap=cap, learned=CURSOR_FIRST, exploration_rate=0.0)
+    assert (pick["agent"], pick["seat_policy"]) == ("cursor", "cursor_last_choice")
+
+
+def test_a_failing_seat_policy_routes_anyway_and_says_so(monkeypatch, capsys, tmp_path):
+    monkeypatch.setenv("ORCH_MODEL_PROBE", "0")
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    monkeypatch.setattr(feedback, "current_weights", lambda *a, **k: [])
+
+    def broken(*a, **k):
+        raise RuntimeError("seat bug")
+
+    monkeypatch.setattr(ro, "judge_seats", broken)
+    pick = roles.route_role("adjudicator", cap=CAP, learned=CURSOR_FIRST, exploration_rate=0.0)
+    assert pick["agent"] == "cursor"
+    assert "judge seats unavailable (RuntimeError('seat bug'))" in capsys.readouterr().err

@@ -1620,11 +1620,14 @@ def route_role(
             role.route_as, cap, only={"muse"}, learned=lw, exploration_rate=exploration_rate
         )
         policy = "muse_review_floor" if pick else None
-    # Candidate sets in order: the pool without a last-choice seat, then with it; then the reserve
-    # seats as before, again holding the last-choice seat back until nothing else answers.
-    tiers = [pool - last, pool]
+    # Candidate sets in order: every other candidate first, the reserve seats included as before,
+    # and only then the last-choice seat (it answers only when nothing else can).
+    tiers = [pool - last]
     if not high_leverage:  # last resort: allow reserve seats
-        tiers += [eligible - last, eligible]
+        tiers.append(eligible - last)
+    tiers.append(pool)
+    if not high_leverage:
+        tiers.append(eligible)
     tried_sets: list[set[str]] = []
     for cands in tiers:
         if pick is not None:
@@ -1660,7 +1663,11 @@ def _judge_seats() -> dict | None:
         import review_outcomes  # noqa: PLC0415  (lazy: review_outcomes imports feedback)
 
         return review_outcomes.judge_seats()
-    except Exception:  # noqa: BLE001 - a judge pick must not fail on the seat policy
+    except Exception as exc:  # noqa: BLE001 - a judge pick must not fail on the seat policy
+        # Fail open, but say so: a pick made without the seats is otherwise indistinguishable.
+        print(
+            f"route_role: judge seats unavailable ({exc!r}); routing without them", file=sys.stderr
+        )
         return None
 
 
