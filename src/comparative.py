@@ -336,7 +336,12 @@ def measure(
     dollar costs, project demand for the same duration as the observation window.
     Unmeasured agents are excluded from the LP and retain null prices/ranks.
     """
-    from adapters import CURSOR_CLI_COST_SOURCE, CURSOR_CLI_NO_USAGE
+    from adapters import CURSOR_CLI_COST_SOURCE, CURSOR_CLI_NO_USAGE, VIBE_SESSION_COST_SOURCE
+
+    # Seats whose plan is a pool spent at list prices and whose runs carry their own dollar cost: they
+    # enter the LP cost-only (c in dollars per run, price 1). Cursor since 11-27 (CLI usage); Vibe since
+    # 11-27 (its session records' `session_cost`, the unit its "Vibe budget" is spent in).
+    cost_only = {"cursor": CURSOR_CLI_COST_SOURCE, "vibe": VIBE_SESSION_COST_SOURCE}
     from feedback import COMPLETE_COST_SOURCES, MIN_COST_COVERAGE, TOKEN_SOURCES
 
     if window_days < 1:
@@ -372,18 +377,24 @@ def measure(
             sources[agent]["reason"] = f"{location}: {reason}"
 
         agent_runs = [row for row in runs if row["agent"] == agent]
-        if agent == "cursor":
+        if agent in cost_only:
             priced = [
                 row["cost_usd"]
                 for row in agent_runs
-                if row["cost_source"] == CURSOR_CLI_COST_SOURCE
+                if row["cost_source"] == cost_only[agent]
                 and _number(row["cost_usd"])
                 and row["cost_usd"] >= 0
             ]
             if len(priced) < MIN_OBS:
-                reason = "excluded: no pacing source (capacity model metered)"
-                if agent_runs and all(
-                    row["cost_source"] == CURSOR_CLI_NO_USAGE for row in agent_runs
+                reason = (
+                    "excluded: no pacing source (capacity model metered)"
+                    if agent == "cursor"
+                    else f"excluded: {len(priced)} of {MIN_OBS} runs priced from {cost_only[agent]}"
+                )
+                if (
+                    agent == "cursor"
+                    and agent_runs
+                    and all(row["cost_source"] == CURSOR_CLI_NO_USAGE for row in agent_runs)
                 ):
                     reason = f"excluded: {CURSOR_CLI_NO_USAGE}"
                 missing(reason)
@@ -394,7 +405,7 @@ def measure(
                 continue
             cost[agent] = dict.fromkeys(cells, sum(priced) / len(priced))
             price[agent] = 1.0  # c is already in dollars per run.
-            sources[agent]["source"] = CURSOR_CLI_COST_SOURCE
+            sources[agent]["source"] = cost_only[agent]
             measured_q[agent] = cells
             cost_only_agents.add(agent)
             continue

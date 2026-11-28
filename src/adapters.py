@@ -604,6 +604,63 @@ def cursor_result_cost(
     return tokens_in, tokens_out, cost_usd, CURSOR_CLI_COST_SOURCE
 
 
+VIBE_SESSION_COST_SOURCE = "vibe-session"
+# Slack around a run's start/end when joining Vibe's own session record to it.
+VIBE_SESSION_JOIN_SLACK_S = 120
+
+
+def vibe_session_dirs() -> list[Path]:
+    """Where Vibe sessions live: the lane runtime home first (dispatcher forces `save_dir` there), then
+    the real home (`VIBE_SESSIONS`, interactive use and sessions from before the runtime home)."""
+    dirs = [AGENT_RUNTIME / "vibe" / ".vibe" / "logs" / "session", VIBE_SESSIONS]
+    return list(dict.fromkeys(dirs))
+
+
+def vibe_session_cost(
+    workspace: str, started_ts: int, ended_ts: int | None = None
+) -> tuple[int, int, float, str] | None:
+    """Tokens and dollars from Vibe's own session record(s) for a run (owner 2026-11-27, P3 gap C).
+
+    Vibe's plan is a dollar budget spent at Mistral API rates ("Vibe budget exhausted", HTTP 402), and the
+    CLI writes `stats.session_cost` / `session_prompt_tokens` / `session_completion_tokens` per session in
+    the same units. Joined by `environment.working_directory` and `start_time` inside the run's window;
+    every matching session is summed (a run may restart its session). None when nothing matches or the
+    matched sessions did no work (0 tokens: a refused or empty run is not a price observation)."""
+    target = str(Path(workspace).expanduser().resolve())
+    end = (ended_ts if ended_ts is not None else started_ts) + VIBE_SESSION_JOIN_SLACK_S
+    begin = started_ts - VIBE_SESSION_JOIN_SLACK_S
+    tokens_in = tokens_out = 0
+    cost = 0.0
+    matched = False
+    for directory in vibe_session_dirs():
+        for meta_path in directory.glob("*/meta.json"):
+            try:
+                meta = json.loads(meta_path.read_text(errors="ignore") or "{}")
+            except (OSError, json.JSONDecodeError):
+                continue
+            env = meta.get("environment") or {}
+            if str(env.get("working_directory") or "") != target:
+                continue
+            stamp = _iso_to_epoch(meta.get("start_time"))
+            if not stamp or not begin <= stamp <= end:
+                continue
+            stats = meta.get("stats") or {}
+            tin, tout, usd = (
+                stats.get("session_prompt_tokens"),
+                stats.get("session_completion_tokens"),
+                stats.get("session_cost"),
+            )
+            if not (type(tin) is int and type(tout) is int and isinstance(usd, (int, float))):
+                continue
+            if tin < 0 or tout < 0 or usd < 0:
+                continue
+            matched = True
+            tokens_in, tokens_out, cost = tokens_in + tin, tokens_out + tout, cost + float(usd)
+    if not matched or tokens_in + tokens_out == 0:
+        return None
+    return tokens_in, tokens_out, cost, VIBE_SESSION_COST_SOURCE
+
+
 parse_agy_models = parse_model_catalog  # back-compat alias
 
 

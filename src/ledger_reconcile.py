@@ -352,6 +352,35 @@ def _classify_run_log_segment(
     return evidence_result
 
 
+_HEADER_CWD = re.compile(r"\bcwd=(\S+)")
+
+
+def _vibe_run_cost(
+    run_rows: list[dict], log_file: Path | None, run_id: str, writers: set[str] | None
+) -> tuple[int, int, float, str] | None:
+    """A Vibe run's tokens and dollars from Vibe's session record, joined by the run header's `cwd=`
+    and the run's start/complete window (adapters.vibe_session_cost)."""
+    if not any(r.get("agent") == "vibe" for r in run_rows) or log_file is None:
+        return None
+    try:
+        lines = log_file.read_text(errors="replace").splitlines()
+    except OSError:
+        return None
+    headers = [line for line in lines if line.startswith("=== ")]
+    # A shared per-target log names the run in its header; a dedicated offload log has one header.
+    own = next((h for h in headers if f"run_id={run_id}" in h), None)
+    if own is None and len(headers) == 1 and "run_id=" not in headers[0]:
+        own = headers[0]
+    match = _HEADER_CWD.search(own or "")
+    cwd = match.group(1) if match else None
+    starts = [int(_number(r.get("started_ts") or r.get("ts")) or 0) for r in run_rows]
+    starts = [t for t in starts if t]
+    ends = [int(_number(r.get("ts")) or 0) for r in run_rows if r.get("event") == "complete"]
+    if not cwd or not starts:
+        return None
+    return adapters.vibe_session_cost(cwd, min(starts), max(ends) if ends else None)
+
+
 def _log_usage(path: Path | None, run_id: str, writers: set[str] | None = None) -> tuple[int, int]:
     if path is None:
         return 0, 0
@@ -873,7 +902,7 @@ def reconcile(
 
     known = _known_runs()
     sources = _cost_sources()
-    protected_sources = {"ccusage", "imputed:subscription"}
+    protected_sources = {"ccusage", "imputed:subscription", adapters.VIBE_SESSION_COST_SOURCE}
     writers_by_log = _writers_by_log(rows)
     written = 0
     marker_backfills = 0
@@ -1025,6 +1054,10 @@ def reconcile(
             log_cost = _log_cost_usd(log_file, run_id, writers)
             if log_cost > cost_usd:  # 16(j): the agent's own reported dollars beat ledger zeros
                 cost_usd = log_cost
+                log_costs_harvested += 1
+            vibe = _vibe_run_cost(run_rows, log_file, run_id, writers)
+            if vibe is not None:  # Vibe's own session record (P3 gap C, 2026-11-27)
+                tokens_in, tokens_out, cost_usd, source = vibe
                 log_costs_harvested += 1
         latency_s = _latency_s(run_rows)
         marker = _done_marker(log_file, run_id)

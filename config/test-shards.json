@@ -44,6 +44,7 @@
     "tests/test_python_floor.py",
     "tests/test_reconcile_floor_dispatches_ci.py",
     "tests/test_review_outcomes.py",
+    "tests/test_vibe_session_cost.py",
     "tests/test_muse_ladder.py",
     "tests/test_ci_tested_merge.py",
     "tests/test_router_choose_mode.py",
@@ -535,7 +536,8 @@
       "tests/test_gemini_pacing_source.py",
       "tests/test_review_outcomes.py",
       "tests/test_ci_tested_merge.py",
-      "tests/test_muse_ladder.py"
+      "tests/test_muse_ladder.py",
+      "tests/test_vibe_session_cost.py"
     ]
   ]
 }
