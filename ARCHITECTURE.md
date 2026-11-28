@@ -1992,6 +1992,21 @@ and had no acting consumer. Sync-core classifies generated sync PRs, and
 Maint 68 still compiles its preview directly. The reference workflow continues
 as a fixture exercise. The periodic report can still read an archived ingest report.
 
+**A delivering row renews itself (owner decision 2026-11-28, "Auto-renew on outcomes").** Every ledger
+row carries an expiry by design (GATED_TTL_DAYS, 90 days, from registration or renewal; no row has ever
+been promoted to `active`), and until this date every producing capability needed a hand `renew` every
+90 days: route-weights-export, published hourly since 2026-09-21 and rated `works` (outcome 93,
+success 81), was days from retirement with nothing to hold it. Now the weekly switch review runs
+`capabilities.auto_renew_on_outcomes` before its gate-expiry notice: every row inside the notice window,
+or already retired by its expiry, whose value-chain row shows `outcome_success > 0` in the trailing
+window renews through the same `renew` (reason generated, the monitor row quoted as the evidence ref);
+a row with no outcomes is left alone and expires on schedule. The monitor reads expiry-retired rows on
+request (`report(include_expired=True)`), so a timed-out row's own outcomes can still bring it back.
+The section prints `renewed N; refused N; no outcome N (expire on schedule); delivering inside the
+notice window and not renewed N` together. It renews only on the live weekly run or an explicit ledger
+path, never a test's injected clock against the real ledger. Kill switch ORCH_CAPABILITY_AUTO_RENEW=0
+(the notice becomes FYI-only again).
+
 **Retired execution is a separate diagnostic.** `capabilities.invoked_after_retirement` reads the
 latest retirement with no later renewal or live transition and names subsequent non-fixture
 invocation events. The firing monitor and switch review's gate-expiry notice expose

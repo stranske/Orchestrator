@@ -2841,7 +2841,7 @@ def review(
             if live_review_clock:
                 now = int(time.time())
             value_chain = value_chain_monitor.report(
-                now=now, path=path, env=env, inputs=value_chain_inputs
+                now=now, path=path, env=env, inputs=value_chain_inputs, include_expired=True
             )
         except Exception as exc:  # noqa: BLE001 — preserve the weekly artifact with honest errors
             value_chain = {
@@ -2853,10 +2853,43 @@ def review(
                 ],
                 "disabled": False,
             }
+    # Auto-renew on outcomes (owner 2026-11-28): a delivering row renews itself here, before the expiry
+    # notice below reads the ledger. This is the one write the weekly run makes WITHOUT
+    # ORCH_SWITCH_REVIEW=1 (that flag still gates owner questions): the owner chose renewal on outcomes
+    # over hand renewal, and its own kill switch is ORCH_CAPABILITY_AUTO_RENEW=0 (cadence_registry row).
+    # Only on the live weekly run or an explicit ledger path: a test that injects a clock against the
+    # real ledger must never write it.
+    auto_renew: dict = {"line": "auto-renew on outcomes: not run (injected clock, real ledger)"}
+    vc_rows: list[dict] = list(value_chain.get("rows") or [])  # type: ignore[call-overload]
+    if live_review_clock or path is not None:
+        try:
+            auto_renew = capabilities.auto_renew_on_outcomes(
+                vc_rows,
+                now=now,
+                horizon_days=GATE_EXPIRY_NOTICE_DAYS,
+                path=Path(path or capabilities.REG),
+                env=env,
+            )
+        except Exception as exc:  # noqa: BLE001 — unmeasured is a word, never a zero
+            auto_renew = {
+                "line": f"auto-renew on outcomes: unmeasured ({type(exc).__name__}: {exc})"
+            }
+    renewed_ids = {r.get("capability_id") for r in auto_renew.get("renewed") or []}
+    if vc_rows:
+        # The displayed value chain stays the LIVE rows: a row still retired by its expiry was read
+        # only so its outcomes could renew it.
+        shown = [
+            r
+            for r in vc_rows
+            if not r.get("retired_by_expiry") or r.get("capability") in renewed_ids
+        ]
+        value_chain["rows"] = shown
+        value_chain["total"] = len(shown)
     import adjudicator_live
     import adjudicator_retro
 
     rep = {
+        "auto_renew": auto_renew,
         "generated_at": now,
         "review_loop": review_round_snapshot(),
         "adjudicator_shadow": adjudicator_retro.weekly_line(),
@@ -3665,6 +3698,16 @@ def format_report(rep: dict) -> str:
         import runtime_ac_gate
 
         lines += [runtime_ac_gate.format_post_merge_summary(rep["runtime_ac_post_merge"]), ""]
+    if rep.get("auto_renew", {}).get("line"):
+        lines += ["## Auto-renew on outcomes", "", f"  {rep['auto_renew']['line']}"]
+        for row in rep["auto_renew"].get("renewed") or []:
+            lines.append(
+                f"    renewed {row['capability_id']} to {row.get('expires_on')} "
+                f"(success {row.get('success')})"
+            )
+        for row in rep["auto_renew"].get("refused") or []:
+            lines.append(f"    not renewed {row['capability_id']}: {row.get('reason')}")
+        lines.append("")
     if expiry is not None:
         lines += format_gate_expiry(expiry)
     if rep.get("weekly_pacing") is not None:

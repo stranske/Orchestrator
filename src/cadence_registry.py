@@ -268,7 +268,11 @@ CADENCE_STEPS: tuple[dict[str, Any], ...] = (
         "cadence_days": 6,
         "artifact": "switch-review.json",
         "log": "switch-review.log",
-        "gate": "writes require ORCH_SWITCH_REVIEW=1; report-only otherwise",
+        "gate": (
+            "owner questions require ORCH_SWITCH_REVIEW=1 (report-only otherwise); the one write it makes "
+            "unflagged is auto-renew on outcomes (owner decision 2026-11-28), whose own kill switch is "
+            "ORCH_CAPABILITY_AUTO_RENEW=0"
+        ),
         "next_transition": "re-raise held/idle switches weekly; questions auto-ratify to the "
         "conservative default so no backlog can form",
     },
