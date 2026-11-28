@@ -1229,10 +1229,6 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
         "claude is separated under reserve, and an unchanged semantic document is not rewritten; "
         "break case: removing the threshold filter admits the fixture's 12-observation cursor "
         "row. Never passes --publish or ORCH_ROUTE_WEIGHTS_PUBLISH=1",
-        "review-outcomes": "EXERCISE the review-outcomes value chain over fixture Brain runs: a "
-        "lane-judge pick is acted on only when its route_decision names the review bucket with "
-        "observations after the first relearn that carried grades; an unread Brain stays "
-        "unmeasured. Read-only; never writes outcome rows",
         "comparative-tilt": "EXERCISE the comparative tilt's read-only value-chain accounting over "
         "fixture Brain runs: demand counts local implement runs with route_decision, invocation "
         "counts those carrying comparative_tilt, usable requires positive base and tilted tier "
@@ -1252,6 +1248,10 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
         "nothing",
     },
     "rail-exercise:readiness": {
+        "review-outcomes": "EXERCISE the review-outcomes value chain over fixture Brain runs: a "
+        "lane-judge pick is acted on only when its route_decision names the review bucket with "
+        "observations after the first relearn that carried grades; an unread Brain stays "
+        "unmeasured. Read-only; never writes outcome rows",
         "opener-core": "EXERCISE the opener core's read-only value-chain adapter over fixture "
         "journals: considered issues stay distinct from started ones, an issue counts as acted on "
         "only once closer-core's rounds carry it, and an unread journal stays unmeasured while an "
