@@ -25,6 +25,14 @@ the router recorded at a rung) is exactly the population the open rung produces;
 level, each rung's resolved count against the bar, and its durable rate. An unreadable Brain is
 `unmeasured` and keeps level 1 (fail toward motion, never toward a higher rung).
 Kill switch: ORCH_MUSE_LADDER=0 (Muse stays a late seat everywhere).
+
+REVIEW RUNG (owner, 2026-11-28). Review work is its own track, `rung: "review"`, judged by Muse's
+graded lane-judge decisions (review_outcomes.muse_seat): lifted once it has >= 5 graded at >= 80%
+PASS within review_outcomes.JUDGE_WINDOW_DAYS. Until then Muse stays a late review seat, and
+roles.route_role gives it a floor of review_outcomes.MUSE_FLOOR_PER_WEEK low-stakes judge calls a
+week (the opener's ordinary judge) so the record can form. Gate contract: the floor is what feeds
+the rung, it opens whenever Muse is short of the week's floor, and it stops once the rung lifts;
+a rate that later falls below the bar closes the rung and reopens the floor.
 """
 
 from __future__ import annotations
@@ -128,6 +136,8 @@ def decision(
     task_type: str, size_tasks: int | None, env: Mapping[str, str] | None = None
 ) -> dict | None:
     """What the router records and uses: {rung, level, lifted}, or None when the work has no rung."""
+    if task_type == "review":
+        return review_decision(env)
     rung = rung_for(task_type, size_tasks)
     if rung is None:
         return None
@@ -135,6 +145,25 @@ def decision(
         return {"rung": rung, "level": None, "lifted": False, "reason": f"{KILL_SWITCH}=0"}
     stand = standing()
     return {"rung": rung, "level": stand["level"], "lifted": rung <= stand["level"]}
+
+
+def review_decision(env: Mapping[str, str] | None = None) -> dict:
+    """The review rung: {rung: "review", lifted, graded}. Never lifted when switched off or unread."""
+    if not enabled(env):
+        return {"rung": "review", "level": None, "lifted": False, "reason": f"{KILL_SWITCH}=0"}
+    try:
+        import review_outcomes  # noqa: PLC0415  (lazy: it imports feedback)
+
+        seats = review_outcomes.judge_seats()
+    except Exception as exc:  # noqa: BLE001 - routing must not stop on the record
+        return {"rung": "review", "level": None, "lifted": False, "reason": f"unread ({exc})"}
+    muse = seats["muse"]
+    return {
+        "rung": "review",
+        "level": None,
+        "lifted": bool(muse["lifted"]),
+        "graded": muse["graded"],
+    }
 
 
 def line(stand: dict | None = None) -> str:

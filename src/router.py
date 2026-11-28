@@ -738,7 +738,7 @@ def route_decision_record(pick: dict | None) -> dict | None:
     decision = pick.get("pacing_decision") or {}
     # A role pick (roles.route_role) names the learned weights that ranked it; that is a decision
     # to grade even without a pacing draw (the review-outcomes chain counts judge picks by it).
-    learned = {k: pick[k] for k in ("learned_bucket", "learned_n_obs") if k in pick}
+    learned = {k: pick[k] for k in ("learned_bucket", "learned_n_obs", "seat_policy") if k in pick}
     if not decision and not pick.get("muse_ladder") and not learned:
         return None
     record = {

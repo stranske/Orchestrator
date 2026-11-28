@@ -817,6 +817,25 @@ keeps them on the run, so a judge pick drawn from graded weights is countable. T
 keep their own bucket: their runs are not graded under `route_as`, and switching them would route,
 for example, the prompt role on implement weights. That is a separate decision.
 
+**Judge seats (owner, 2026-11-28).** Two seats on the adjudicator are now set by the graded
+lane-judge record (`review_outcomes.judge_seats`, one 90-day `JUDGE_WINDOW_DAYS` window for every
+bar, read-only, cached 5 minutes):
+- **Cursor joined the role on probation.** `cursor_seat` makes it `last_choice` when, over at
+  least 10 runs, fewer than half its answers are usable, or when, over at least 10 graded with
+  at least 3 FAILs, its FAIL rate is at least 3x the peers' (gemini, codex, claude) pooled rate. It
+  is `removed` when, over at least 20 graded, its FAIL rate is at least max(25%, 4x peers). A
+  last-choice seat is tried only after every other candidate, so its record keeps accruing; a
+  removed seat drains as its FAILs age out of the window (the line prints the first date).
+- **Muse earns a review rung.** `muse_ladder.decision("review")` lifts it from a late review seat
+  once it has 5 graded at 80% PASS (`muse_seat`). Until then `route_role(..., low_stakes=True)`, which
+  the opener's ordinary judge passes, sends the call to muse first while muse has fewer than 7
+  judge runs this week. Strong calls and the closer's calls never take the floor; a shed muse
+  never blocks one.
+- Picks carry `seat_policy` (`muse_review_floor`, `cursor_last_choice`) in `route_decision`.
+  `review_outcomes.py run` and `probe` print one `judge seats` line every tick: cursor's state,
+  runs, usable, graded against 20, FAIL rate against peers, and muse's rung, graded against 5 and
+  week's floor. An unreadable Brain leaves cursor eligible and muse late with no floor.
+
 | role | replaces / upgrades | judgment it adds | status |
 |---|---|---|---|
 | **RedirectAgent** | `redirect_policy` heuristics | read log+diff+AC → action + corrected prompt | **built, shadow (2026-06-19)** |
@@ -2764,8 +2783,10 @@ AdjudicatorAgent upgrades disputed-reviewer handling into a callable role. It re
 against supplied ground-truth evidence and advises whether to uphold it, reject it, or gather more
 evidence.
 
-- **Routing.** `route_as="review"` (prior only), `eligible_backends={gemini, codex, claude, muse}`. Claude is
-  reserved by default through `route_role()`, so routine shadow adjudication starts with Gemini/Codex.
+- **Routing.** `route_as="review"` (prior only; since 2026-11-28 its learned weights too),
+  `eligible_backends={gemini, codex, claude, muse, cursor}` (cursor on probation since 2026-11-28; see
+  "Judge seats"). Claude is reserved by default through `route_role()`, so routine shadow adjudication
+  starts with Gemini/Codex.
 - **Shadow only — never emits terminal verifier verdicts or mutates.** It does not produce `PASS`, `FAIL`,
   `BLOCKED`, or `verifier_verdict`, and it does not call merge/label/claim/delegate paths.
 - **Rail preservation.** `runtime_ac_panel.adjudicate_panel()` and `adversarial.aggregate_veto()` remain the
